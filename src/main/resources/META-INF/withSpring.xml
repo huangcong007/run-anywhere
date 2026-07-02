@@ -1,0 +1,6 @@
+<idea-plugin>
+    <!-- Spring 集成可选配置文件，当 com.intellij.spring 插件存在时启用 -->
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- 预留：Spring Bean 名称识别扩展点（阶段2实现） -->
+    </extensions>
+</idea-plugin>

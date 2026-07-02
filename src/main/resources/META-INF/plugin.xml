@@ -1,0 +1,67 @@
+<idea-plugin>
+    <id>com.runanywhere</id>
+    <name>Run Anywhere</name>
+    <vendor email="run-anywhere@example.com" url="https://github.com/run-anywhere">Run Anywhere</vendor>
+
+    <description><![CDATA[
+        <h3>Run Anywhere</h3>
+        <p>Right-click on any Java method to invoke it in the running JVM via bundled Arthas.</p>
+        <ul>
+            <li>Supports static methods, instance methods, and Spring Bean methods</li>
+            <li>Auto-detects Java processes started from IDEA</li>
+            <li>Simple type parameter input dialog</li>
+            <li>Structured result display in tool window</li>
+        </ul>
+    ]]></description>
+
+    <change-notes><![CDATA[
+        <b>0.1.0</b><br/>
+        Initial version: basic method invocation via Arthas attach.
+    ]]></change-notes>
+
+    <!-- 依赖 Java 插件（必须，提供 PsiMethod 等 PSI API） -->
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.java</depends>
+
+    <!-- 可选依赖 Spring 插件（用于 Spring Bean 识别） -->
+    <depends optional="true" config-file="withSpring.xml">com.intellij.spring</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- 工具窗口 -->
+        <toolWindow
+            id="Run Anywhere"
+            anchor="bottom"
+            icon="com.runanywhere.icons.RunAnywhereIcons.ToolWindow"
+            factoryClass="com.runanywhere.ui.RunResultToolWindowFactory"/>
+
+        <!-- 项目级 Service：管理 Arthas 会话 -->
+        <projectService
+            serviceInterface="com.runanywhere.service.ArthasSessionService"
+            serviceImplementation="com.runanywhere.service.ArthasSessionService"/>
+
+        <!-- Settings → Other Settings → Run Anywhere -->
+        <applicationConfigurable
+            parentId="other"
+            instance="com.runanywhere.settings.RunAnywhereSettingsConfigurable"
+            id="com.runanywhere.settings"
+            displayName="Run Anywhere"/>
+    </extensions>
+
+    <applicationListeners>
+        <listener class="com.runanywhere.lifecycle.RunAnywhereAppListener"
+                  topic="com.intellij.ide.AppLifecycleListener"/>
+    </applicationListeners>
+
+    <actions>
+        <!-- 主 Action：右键调用方法 -->
+        <action
+            id="com.runanywhere.RunMethodAction"
+            class="com.runanywhere.action.RunMethodAction"
+            icon="com.runanywhere.icons.RunAnywhereIcons.ToolWindow"
+            text="运行方法 (Run Anywhere)"
+            description="通过内置 Arthas 调用运行中 JVM 内的该方法">
+            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="alt shift A"/>
+        </action>
+    </actions>
+</idea-plugin>
