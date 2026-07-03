@@ -11,8 +11,11 @@ object JsonDeserializeOgnlBuilder {
 
     private const val JACKSON_MAPPER = "com.fasterxml.jackson.databind.ObjectMapper"
     private const val GSON = "com.google.gson.Gson"
-    private const val FASTJSON2 = "com.alibaba.fastjson2.JSON"
-    private const val FASTJSON = "com.alibaba.fastjson.JSON"
+
+    // fastjson2 的 JSON 是抽象类，OGNL 的 @Class@method 语法无法在抽象类上调用静态方法
+    // （报 "No method accessor for interface ..."），改用具体子类 JSONObject。
+    private const val FASTJSON2 = "com.alibaba.fastjson2.JSONObject"
+    private const val FASTJSON = "com.alibaba.fastjson.JSONObject"
 
     fun build(json: String, param: MethodMetadata.ParamInfo, library: JsonLibrary): String {
         val escapedJson = OgnlLiteralConverter.escapeForOgnlDoubleQuotedString(json)
@@ -97,6 +100,8 @@ object JsonDeserializeOgnlBuilder {
     }
 
     private fun buildFastjson2(escapedJson: String, param: MethodMetadata.ParamInfo): String {
+        // TypeReference 也是抽象类，OGNL 同样无法调用其静态方法，因此集合/Map
+        // 改用 parseArray / parseObject(json) 等不依赖 TypeReference 的重载。
         val typeExpr = when (param.kind) {
             ParamTypeKind.OBJECT ->
                 "@$FASTJSON2@parseObject(\"$escapedJson\",@${param.type}@class)"
@@ -106,15 +111,10 @@ object JsonDeserializeOgnlBuilder {
             }
             ParamTypeKind.COLLECTION -> {
                 val elementType = param.elementType ?: "java.lang.Object"
-                "@$FASTJSON2@parseObject(\"$escapedJson\"," +
-                    "@com.alibaba.fastjson2.TypeReference@collectionType(@${param.type}@class,@$elementType@class))"
+                "@$FASTJSON2@parseArray(\"$escapedJson\",@$elementType@class)"
             }
-            ParamTypeKind.MAP -> {
-                val keyType = param.mapKeyType ?: "java.lang.String"
-                val valueType = param.mapValueType ?: "java.lang.Object"
-                "@$FASTJSON2@parseObject(\"$escapedJson\"," +
-                    "@com.alibaba.fastjson2.TypeReference@mapType(@${param.type}@class,@$keyType@class,@$valueType@class))"
-            }
+            ParamTypeKind.MAP ->
+                "@$FASTJSON2@parseObject(\"$escapedJson\")"
             else -> return "null"
         }
         return "($typeExpr)"
@@ -134,7 +134,7 @@ object JsonDeserializeOgnlBuilder {
                 "@$FASTJSON@parseArray(\"$escapedJson\",@$elementType@class)"
             }
             ParamTypeKind.MAP ->
-                "@$FASTJSON@parseObject(\"$escapedJson\",@java.util.Map@class)"
+                "@$FASTJSON@parseObject(\"$escapedJson\")"
             else -> return "null"
         }
         return "($expr)"

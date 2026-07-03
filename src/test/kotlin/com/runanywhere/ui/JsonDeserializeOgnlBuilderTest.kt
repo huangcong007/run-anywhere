@@ -39,14 +39,14 @@ class JsonDeserializeOgnlBuilderTest {
     @Test
     fun `fastjson2 collection deserialization`() {
         val result = JsonDeserializeOgnlBuilder.build("[{\"id\":1}]", listParam, JsonLibrary.FASTJSON2)
-        assertTrue(result.contains("com.alibaba.fastjson2.JSON"))
-        assertTrue(result.contains("collectionType"))
+        assertTrue(result.contains("com.alibaba.fastjson2.JSONObject"))
+        assertTrue(result.contains("parseArray"))
     }
 
     @Test
     fun `fastjson1 collection deserialization`() {
         val result = JsonDeserializeOgnlBuilder.build("[{\"id\":1}]", listParam, JsonLibrary.FASTJSON)
-        assertTrue(result.contains("com.alibaba.fastjson.JSON"))
+        assertTrue(result.contains("com.alibaba.fastjson.JSONObject"))
         assertTrue(result.contains("parseArray"))
     }
 
@@ -56,8 +56,8 @@ class JsonDeserializeOgnlBuilderTest {
         assertTrue(result.contains("Class@forName"))
         assertTrue(result.contains("com.fasterxml.jackson.databind.ObjectMapper"))
         assertTrue(result.contains("com.google.gson.Gson"))
-        assertTrue(result.contains("com.alibaba.fastjson2.JSON"))
-        assertTrue(result.contains("com.alibaba.fastjson.JSON"))
+        assertTrue(result.contains("com.alibaba.fastjson2.JSONObject"))
+        assertTrue(result.contains("com.alibaba.fastjson.JSONObject"))
     }
 
     @Test
