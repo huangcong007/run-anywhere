@@ -92,7 +92,76 @@ class OgnlExpressionBuilderTest {
             springBeanName = "materialService",
             isVoidReturn = true
         )
-        val command = OgnlExpressionBuilder.buildCommand(metadata, listOf("123L"))
+        val command = OgnlExpressionBuilder.buildCommand(metadata, listOf("123L"), expandLevel = 5)
         assertTrue(command.endsWith("-x 0"))
+    }
+
+    @Test
+    fun `expand level comes from the caller`() {
+        val metadata = com.runanywhere.psi.MethodMetadata(
+            className = "com.example.Utils",
+            methodName = "add",
+            parameters = emptyList(),
+            isStatic = true,
+            springBeanName = null
+        )
+        val command = OgnlExpressionBuilder.buildCommand(metadata, listOf("1"), expandLevel = 5)
+        assertTrue(command.endsWith("-x 5"))
+    }
+
+    @Test
+    fun `unique constructor uses new`() {
+        val metadata = com.runanywhere.psi.MethodMetadata(
+            className = "com.example.User",
+            methodName = "User",
+            parameters = listOf(com.runanywhere.psi.MethodMetadata.ParamInfo("id", "long", isPrimitive = true)),
+            isStatic = false,
+            springBeanName = null,
+            isConstructor = true
+        )
+        val command = OgnlExpressionBuilder.buildCommand(metadata, listOf("1L"))
+        assertEquals("ognl 'new com.example.User(1L)' -x 3", command)
+    }
+
+    @Test
+    fun `overloaded static method is pinned by parameter classes`() {
+        val metadata = com.runanywhere.psi.MethodMetadata(
+            className = "com.example.Utils",
+            methodName = "add",
+            parameters = listOf(com.runanywhere.psi.MethodMetadata.ParamInfo("id", "java.lang.Long")),
+            isStatic = true,
+            springBeanName = null,
+            overloaded = true
+        )
+        val command = OgnlExpressionBuilder.buildCommand(metadata, listOf("1L"))
+        assertTrue(command.startsWith("ognl '"))
+        assertTrue(command.contains("getDeclaredMethod(\"add\",new java.lang.Class[]{(@java.lang.Long@class)})"))
+        assertTrue(command.contains("invoke(null,new java.lang.Object[]{(1L)})"))
+        assertFalse(command.contains("@com.example.Utils@add("))
+    }
+
+    @Test
+    fun `overloaded constructor uses getDeclaredConstructor`() {
+        val metadata = com.runanywhere.psi.MethodMetadata(
+            className = "com.example.User",
+            methodName = "User",
+            parameters = listOf(com.runanywhere.psi.MethodMetadata.ParamInfo("name", "java.lang.String")),
+            isStatic = false,
+            springBeanName = null,
+            isConstructor = true,
+            overloaded = true
+        )
+        val command = OgnlExpressionBuilder.buildCommand(metadata, listOf("\"ada\""))
+        assertTrue(command.contains("getDeclaredConstructor(new java.lang.Class[]{(@java.lang.String@class)})"))
+        assertTrue(command.contains("newInstance(new java.lang.Object[]{(\"ada\")})"))
+    }
+
+    @Test
+    fun `instance labels use simple name and identity hash`() {
+        val command = OgnlExpressionBuilder.buildInstanceLabelCommand("com.example.User")
+        assertTrue(command.contains("getSimpleName()"))
+        assertTrue(command.contains("identityHashCode(#this)"))
+        val inner = command.substringAfter("--express '").substringBeforeLast("' -x")
+        assertFalse(inner.contains("'"))
     }
 }

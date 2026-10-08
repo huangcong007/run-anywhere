@@ -64,13 +64,14 @@ class RunMethodAction : AnAction() {
         }
         val execTimeoutMs = RunAnywhereSettings.getExecTimeoutMs()
         val asyncExecution = RunAnywhereSettings.isAsyncExecution()
+        val expandLevel = RunAnywhereSettings.getResultExpandLevel()
 
         val processes = RunningProcessDetector.getRunningProcesses(project)
         ProcessSelectionPopup.selectFromProcesses(
             project, processes, method, metadata
         ) { process ->
             invokeViaArthas(
-                project, metadata, ognlArgs, execTimeoutMs, asyncExecution,
+                project, metadata, ognlArgs, execTimeoutMs, asyncExecution, expandLevel,
                 process.pid, process.displayName
             )
         }
@@ -93,15 +94,16 @@ class RunMethodAction : AnAction() {
         ognlArgs: List<String>,
         execTimeoutMs: Long,
         asyncExecution: Boolean,
+        expandLevel: Int,
         pid: Long,
         processName: String
     ) {
         val tabTitle = "PID $pid ${metadata.methodName}()"
-        val needsInstancePick = !metadata.isStatic && metadata.springBeanName == null
+        val needsInstancePick = !metadata.isStatic && metadata.springBeanName == null && !metadata.isConstructor
         val preliminary = if (needsInstancePick) {
             "正在查询 ${metadata.className} 的实例..."
         } else {
-            OgnlExpressionBuilder.buildCommand(metadata, ognlArgs)
+            OgnlExpressionBuilder.buildCommand(metadata, ognlArgs, expandLevel = expandLevel)
         }
         val runningContent = RunResultToolWindowFactory.showRunning(project, tabTitle, preliminary)
 
@@ -137,14 +139,32 @@ class RunMethodAction : AnAction() {
                 resolveInstanceIndex(project, arthasManager, metadata, pid, execTimeoutMs, tabTitle, runningContent)
                     ?: return@executeMethod
             }
-            val command = OgnlExpressionBuilder.buildCommand(metadata, ognlArgs, instanceIndex)
+            val command = OgnlExpressionBuilder.buildCommand(
+                metadata, ognlArgs, instanceIndex, expandLevel
+            )
             LOG.info("RunMethod: executing command: $command (async=$asyncExecution, timeout=${execTimeoutMs}ms)")
             val response = arthasManager.exec(pid, command, execTimeoutMs, asyncExecution)
             LOG.info("RunMethod: response success=${response.isSuccess}, status=${response.statusCode}")
+            val finalResponse = if (asyncExecution && ArthasResponseParser.isAsyncSubmitted(response)) {
+                RunResultToolWindowFactory.updateResult(
+                    project, runningContent,
+                    InvocationResult(tabTitle, command, response, asyncMode = true)
+                )
+                arthasManager.awaitAsyncResult(pid, response, execTimeoutMs) { !project.isDisposed }
+            } else {
+                response
+            }
+            val stillSubmitted = ArthasResponseParser.isAsyncSubmitted(finalResponse) &&
+                !ArthasResponseParser.hasExecutionOutput(finalResponse)
 
             RunResultToolWindowFactory.updateResult(
                 project, runningContent,
-                InvocationResult(tabTitle, command, response, asyncMode = asyncExecution)
+                InvocationResult(
+                    tabTitle,
+                    command,
+                    finalResponse,
+                    asyncMode = asyncExecution && stillSubmitted
+                )
             )
         }
     }
@@ -184,10 +204,14 @@ class RunMethodAction : AnAction() {
         }
         if (count == 1) return 0
         if (project.isDisposed) return null
+        val labelCommand = OgnlExpressionBuilder.buildInstanceLabelCommand(metadata.className)
+        val labelResponse = arthasManager.exec(pid, labelCommand, execTimeoutMs, async = false)
+        val labels = ArthasResponseParser.parseStringItems(labelResponse)
+        val display = if (labels.size == count) labels else (0 until count).map { "instances[$it]" }
         var selected: Int? = null
         ApplicationManager.getApplication().invokeAndWait {
             if (!project.isDisposed) {
-                selected = InstancePickDialog(project, metadata.className, count).showAndGetIndex()
+                selected = InstancePickDialog(project, metadata.className, display).showAndGetIndex()
             }
         }
         if (selected == null) {

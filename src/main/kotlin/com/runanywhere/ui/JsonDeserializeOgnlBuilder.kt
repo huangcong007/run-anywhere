@@ -2,6 +2,7 @@ package com.runanywhere.ui
 
 import com.runanywhere.psi.MethodMetadata
 import com.runanywhere.psi.ParamTypeKind
+import com.runanywhere.psi.TypeDesc
 import com.runanywhere.settings.JsonLibrary
 
 /**
@@ -87,7 +88,20 @@ object JsonDeserializeOgnlBuilder {
         param: MethodMetadata.ParamInfo,
         mapperVar: String = "_raMapper"
     ): String {
-        val readValue = when (param.kind) {
+        val readValue = jacksonReadValue(jsonExpr, param, mapperVar) ?: return "null"
+        return "(#$mapperVar=new $JACKSON_MAPPER(),#$mapperVar.findAndRegisterModules(),$readValue)"
+    }
+
+    private fun jacksonReadValue(
+        jsonExpr: String,
+        param: MethodMetadata.ParamInfo,
+        mapperVar: String
+    ): String? {
+        val nested = param.typeDesc?.takeIf { it.isNested() }
+        if (nested != null) {
+            return "#$mapperVar.readValue($jsonExpr,${jacksonJavaType(nested, mapperVar)})"
+        }
+        return when (param.kind) {
             ParamTypeKind.OBJECT ->
                 "#$mapperVar.readValue($jsonExpr,${classExpr(param.type)})"
             ParamTypeKind.ARRAY -> {
@@ -106,9 +120,8 @@ object JsonDeserializeOgnlBuilder {
                 "#$mapperVar.readValue($jsonExpr," +
                     "#$mapperVar.getTypeFactory().constructMapType(${classExpr(param.type)},${classExpr(keyType)},${classExpr(valueType)}))"
             }
-            else -> return "null"
+            else -> null
         }
-        return "(#$mapperVar=new $JACKSON_MAPPER(),$readValue)"
     }
 
     private fun buildGson(
@@ -116,7 +129,10 @@ object JsonDeserializeOgnlBuilder {
         param: MethodMetadata.ParamInfo,
         gsonVar: String = "_raGson"
     ): String {
-        val typeExpr = when (param.kind) {
+        val nested = param.typeDesc?.takeIf { it.isNested() }
+        val typeExpr = if (nested != null) {
+            gsonType(nested)
+        } else when (param.kind) {
             ParamTypeKind.OBJECT -> classExpr(param.type)
             ParamTypeKind.ARRAY -> {
                 val componentType = param.elementType ?: param.type.removeSuffix("[]")
@@ -137,6 +153,10 @@ object JsonDeserializeOgnlBuilder {
     }
 
     private fun buildFastjson2(jsonExpr: String, param: MethodMetadata.ParamInfo): String {
+        val nested = param.typeDesc?.takeIf { it.isNested() }
+        if (nested != null) {
+            return "(${fastjson2TypedParse(jsonExpr, fastjsonType(nested, FASTJSON2_TYPE_IMPL, FASTJSON2_GENERIC_ARRAY))})"
+        }
         val typeExpr = when (param.kind) {
             ParamTypeKind.OBJECT ->
                 "@$FASTJSON2_OBJECT@parseObject($jsonExpr,${classExpr(param.type)})"
@@ -170,6 +190,10 @@ object JsonDeserializeOgnlBuilder {
     }
 
     private fun buildFastjson1(jsonExpr: String, param: MethodMetadata.ParamInfo): String {
+        val nested = param.typeDesc?.takeIf { it.isNested() }
+        if (nested != null) {
+            return "(${fastjson1TypedParse(jsonExpr, fastjsonType(nested, FASTJSON1_TYPE_IMPL, FASTJSON1_GENERIC_ARRAY))})"
+        }
         val expr = when (param.kind) {
             ParamTypeKind.OBJECT ->
                 "@$FASTJSON@parseObject($jsonExpr,${classExpr(param.type)})"
@@ -207,4 +231,81 @@ object JsonDeserializeOgnlBuilder {
 
     private fun fastjson1TypedParse(jsonExpr: String, typeExpr: String): String =
         "@$FASTJSON1_JSON@parseObject($jsonExpr,$typeExpr,$FASTJSON1_NO_FEATURES)"
+
+    private val COLLECTION_RAWS = setOf(
+        "java.util.Collection",
+        "java.util.List",
+        "java.util.Set",
+        "java.util.ArrayList",
+        "java.util.LinkedList",
+        "java.util.HashSet",
+        "java.util.LinkedHashSet",
+        "java.util.TreeSet"
+    )
+
+    private val MAP_RAWS = setOf(
+        "java.util.Map",
+        "java.util.HashMap",
+        "java.util.LinkedHashMap",
+        "java.util.TreeMap",
+        "java.util.concurrent.ConcurrentHashMap"
+    )
+
+    private const val FASTJSON2_GENERIC_ARRAY = "com.alibaba.fastjson2.util.GenericArrayTypeImpl"
+    private const val FASTJSON1_GENERIC_ARRAY = "com.alibaba.fastjson.util.GenericArrayTypeImpl"
+
+    private fun jacksonJavaType(desc: TypeDesc, mapperVar: String): String {
+        val factory = "#$mapperVar.getTypeFactory()"
+        val core = when {
+            desc.args.isEmpty() -> "$factory.constructType(${classExpr(desc.raw)})"
+            desc.raw in MAP_RAWS && desc.args.size >= 2 ->
+                "$factory.constructMapType(${classExpr(desc.raw)}," +
+                    "${jacksonJavaType(desc.args[0], mapperVar)},${jacksonJavaType(desc.args[1], mapperVar)})"
+            desc.raw in COLLECTION_RAWS && desc.args.isNotEmpty() ->
+                "$factory.constructCollectionType(${classExpr(desc.raw)},${jacksonJavaType(desc.args[0], mapperVar)})"
+            else -> {
+                val params = desc.args.joinToString(",") { "(${jacksonJavaType(it, mapperVar)})" }
+                "$factory.constructParametricType(${classExpr(desc.raw)}," +
+                    "new com.fasterxml.jackson.databind.JavaType[]{$params})"
+            }
+        }
+        var expr = core
+        repeat(desc.arrayDimensions) {
+            expr = "$factory.constructArrayType($expr)"
+        }
+        return expr
+    }
+
+    private fun gsonType(desc: TypeDesc): String {
+        val core = if (desc.args.isEmpty()) {
+            classExpr(desc.raw)
+        } else {
+            val args = desc.args.joinToString(",") { gsonType(it) }
+            "@com.google.gson.reflect.TypeToken@getParameterized(${classExpr(desc.raw)},$args).getType()"
+        }
+        var expr = core
+        repeat(desc.arrayDimensions) {
+            expr = "@com.google.gson.reflect.TypeToken@getArray($expr).getType()"
+        }
+        return expr
+    }
+
+    private fun fastjsonType(desc: TypeDesc, implClass: String, genericArrayClass: String): String {
+        val core = if (desc.args.isEmpty()) {
+            classExpr(desc.raw)
+        } else {
+            val args = desc.args.joinToString(",") { "(${fastjsonType(it, implClass, genericArrayClass)})" }
+            "new $implClass(new java.lang.reflect.Type[]{$args},null,(${classExpr(desc.raw)}))"
+        }
+        val genericArray = desc.args.isNotEmpty()
+        var expr = core
+        repeat(desc.arrayDimensions) {
+            expr = if (genericArray) {
+                "new $genericArrayClass($expr)"
+            } else {
+                "@java.lang.reflect.Array@newInstance($expr,0).getClass()"
+            }
+        }
+        return expr
+    }
 }

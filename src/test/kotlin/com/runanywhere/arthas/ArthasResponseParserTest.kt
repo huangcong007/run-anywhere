@@ -66,5 +66,30 @@ class ArthasResponseParserTest {
         assertTrue(ArthasResponseParser.isAsyncSubmitted(response))
         assertTrue(ArthasResponseParser.isExecutionSuccessful(response, asyncMode = true))
         assertTrue(ArthasResponseParser.parse(response, asyncMode = true).contains("已异步提交执行"))
+        assertFalse(ArthasResponseParser.hasExecutionOutput(response))
+    }
+
+    @Test
+    fun `reads string items from a vmtool list`() {
+        val jsonArray = ArthasResponse(
+            statusCode = 200,
+            body = """{"body":{"results":[{"value":["User@1","User@2"]}]}}""",
+            isSuccess = true
+        )
+        assertEquals(listOf("User@1", "User@2"), ArthasResponseParser.parseStringItems(jsonArray))
+
+        val text = ArthasResponse(
+            statusCode = 200,
+            body = """{"body":{"results":[{"value":"[User@1, User@2]"}]}}""",
+            isSuccess = true
+        )
+        assertEquals(listOf("User@1", "User@2"), ArthasResponseParser.parseStringItems(text))
+    }
+
+    @Test
+    fun `unknown pull action keeps the submitted response path`() {
+        val response = ArthasResponse(400, """{"message":"unknown action: pull_results"}""", false, "unknown action: pull_results")
+        assertTrue(ArthasResponseParser.isPullUnsupported(response))
+        assertFalse(ArthasResponseParser.isPullUnsupported(ArthasResponse(200, """{"state":"SUCCEEDED","body":{"results":[]}}""", true)))
     }
 }

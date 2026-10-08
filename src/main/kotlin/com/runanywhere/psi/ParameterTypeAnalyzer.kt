@@ -29,6 +29,15 @@ internal object ParameterTypeAnalyzer {
         "java.math.BigInteger"
     )
 
+    private val TEMPORAL_TYPES = setOf(
+        "java.time.LocalDate",
+        "java.time.LocalDateTime",
+        "java.time.LocalTime",
+        "java.time.Instant",
+        "java.time.OffsetDateTime",
+        "java.time.ZonedDateTime"
+    )
+
     private val COLLECTION_TYPES = setOf(
         "java.util.Collection",
         "java.util.List",
@@ -48,7 +57,28 @@ internal object ParameterTypeAnalyzer {
         "java.util.concurrent.ConcurrentHashMap"
     )
 
-    fun analyze(psiType: PsiType): AnalyzedParamType {
+    fun analyze(psiType: PsiType): AnalyzedParamType =
+        classify(psiType).copy(typeDesc = describe(psiType))
+
+    /**
+     * 递归保留泛型实参和数组维度。扁平的 [typeFqn] 会丢掉 `List<List<User>>` 的内层参数。
+     */
+    internal fun describe(psiType: PsiType): TypeDesc {
+        return when (psiType) {
+            is PsiArrayType -> {
+                val component = describe(psiType.componentType)
+                component.copy(arrayDimensions = component.arrayDimensions + 1)
+            }
+            is PsiPrimitiveType -> TypeDesc(psiType.canonicalText)
+            is PsiClassType -> TypeDesc(
+                raw = MethodMetadataExtractor.simplifyType(psiType.canonicalText),
+                args = psiType.parameters.map { describe(it) }
+            )
+            else -> TypeDesc(MethodMetadataExtractor.simplifyType(psiType.canonicalText))
+        }
+    }
+
+    private fun classify(psiType: PsiType): AnalyzedParamType {
         when (psiType) {
             is PsiPrimitiveType -> {
                 val name = psiType.canonicalText
@@ -86,7 +116,7 @@ internal object ParameterTypeAnalyzer {
             return AnalyzedParamType(type = fqn, kind = ParamTypeKind.SIMPLE, isPrimitive = true)
         }
 
-        if (fqn in SIMPLE_REFERENCE_TYPES) {
+        if (fqn in SIMPLE_REFERENCE_TYPES || fqn in TEMPORAL_TYPES) {
             return AnalyzedParamType(type = fqn, kind = ParamTypeKind.SIMPLE)
         }
 
@@ -153,6 +183,7 @@ internal object ParameterTypeAnalyzer {
         val mapKeyType: String? = null,
         val mapValueType: String? = null,
         val isPrimitive: Boolean = false,
-        val isEnum: Boolean = false
+        val isEnum: Boolean = false,
+        val typeDesc: TypeDesc? = null
     )
 }

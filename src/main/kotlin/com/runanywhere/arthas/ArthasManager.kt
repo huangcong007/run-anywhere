@@ -226,6 +226,48 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
         else session.httpClient.exec(command, execTimeout)
     }
 
+    /**
+     * async_exec 返回 SCHEDULED 后，用同一条 HTTP session 拉取真实输出。
+     * 不占用 attach 锁。未知 action 或 consumer 不可用时保留提交响应。
+     */
+    fun awaitAsyncResult(
+        pid: Long,
+        submitted: ArthasResponse,
+        waitTimeoutMs: Long,
+        shouldContinue: () -> Boolean = { true }
+    ): ArthasResponse {
+        val session = sessions[pid] ?: return submitted
+        if (!ArthasResponseParser.isAsyncSubmitted(submitted)) return submitted
+        val deadline = System.currentTimeMillis() + waitTimeoutMs
+        var sawPull = false
+        while (shouldContinue() && System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(500)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return submitted
+            }
+            if (!shouldContinue()) break
+            val pulled = session.httpClient.pullResults()
+            if (ArthasResponseParser.isPullUnsupported(pulled)) return submitted
+            if (pulled.body.isEmpty() && !pulled.isSuccess) continue
+            sawPull = true
+            if (ArthasResponseParser.hasExecutionOutput(pulled) ||
+                ArthasResponseParser.isFailed(pulled) ||
+                ArthasResponseParser.isInterrupted(pulled)
+            ) {
+                return pulled
+            }
+        }
+        if (!sawPull) return submitted
+        return ArthasResponse(
+            statusCode = submitted.statusCode,
+            body = submitted.body,
+            isSuccess = submitted.isSuccess,
+            errorMessage = "已提交，但在 ${waitTimeoutMs / 1000} 秒内没有等到返回值。若目标线程停在断点，继续执行后可重新调用。"
+        )
+    }
+
     fun detach(pid: Long) {
         synchronized(pidLock(pid)) {
             detachLocked(pid)

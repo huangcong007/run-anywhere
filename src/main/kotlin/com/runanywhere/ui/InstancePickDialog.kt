@@ -15,17 +15,15 @@ import javax.swing.JPanel
 class InstancePickDialog(
     project: Project,
     className: String,
-    count: Int
+    labels: List<String>
 ) : DialogWrapper(project) {
 
     private val centerLabel: JLabel
-    private val combo = ComboBox(
-        DefaultComboBoxModel((0 until count).map { index -> "instances[$index]" }.toTypedArray())
-    )
+    private val combo = ComboBox(DefaultComboBoxModel(labels.toTypedArray()))
 
     init {
         val safeName = className.replace("&", "&amp;").replace("<", "&lt;")
-        centerLabel = JLabel("<html>类 $safeName 有 $count 个实例，请选择要调用的那个。</html>")
+        centerLabel = JLabel("<html>类 $safeName 有 ${labels.size} 个实例，请选择要调用的那个。</html>")
         title = "选择实例"
         setOKButtonText("调用")
         setCancelButtonText("取消")

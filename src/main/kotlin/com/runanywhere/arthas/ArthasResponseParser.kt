@@ -2,7 +2,6 @@ package com.runanywhere.arthas
 
 import com.google.gson.Gson
 import com.google.gson.JsonObject
-import com.runanywhere.settings.RunAnywhereSettings
 
 /**
  * 解析 Arthas HTTP API 返回的 JSON 响应体。
@@ -47,6 +46,57 @@ object ArthasResponseParser {
         if (isInterrupted(response) || isFailed(response)) return false
         if (asyncMode && isAsyncSubmitted(response)) return true
         return true
+    }
+
+    fun hasExecutionOutput(response: ArthasResponse): Boolean {
+        if (response.body.isEmpty()) return false
+        return try {
+            val root = GSON.fromJson(response.body, JsonObject::class.java) ?: return false
+            val results = root.getAsJsonObject("body")?.getAsJsonArray("results") ?: return false
+            results.size() > 0
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * pull_results 不被当前 Arthas 识别，或 consumer 已经不存在。此时保留提交结果。
+     */
+    fun isPullUnsupported(response: ArthasResponse): Boolean {
+        if (response.isSuccess) return false
+        val msg = (response.errorMessage ?: response.body).lowercase()
+        return msg.contains("unknown action") ||
+            msg.contains("not support") ||
+            msg.contains("no such action") ||
+            msg.contains("pull_results") ||
+            msg.contains("consumer")
+    }
+
+    fun parseStringItems(response: ArthasResponse): List<String> {
+        if (!response.isSuccess || response.body.isEmpty()) return emptyList()
+        return try {
+            val root = GSON.fromJson(response.body, JsonObject::class.java) ?: return emptyList()
+            val results = root.getAsJsonObject("body")?.getAsJsonArray("results") ?: return emptyList()
+            if (results.size() == 0) return emptyList()
+            val value = results[0].asJsonObject.get("value") ?: return emptyList()
+            when {
+                value.isJsonArray -> value.asJsonArray.map { element ->
+                    if (element.isJsonPrimitive) element.asString else element.toString()
+                }
+                value.isJsonPrimitive && value.asJsonPrimitive.isString -> splitBracketList(value.asString)
+                else -> emptyList()
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun splitBracketList(text: String): List<String> {
+        val trimmed = text.trim()
+        if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) return emptyList()
+        val inner = trimmed.substring(1, trimmed.length - 1).trim()
+        if (inner.isEmpty()) return emptyList()
+        return inner.split(", ").map { it.trim() }.filter { it.isNotEmpty() }
     }
 
     fun parseIntValue(response: ArthasResponse): Int? {
@@ -121,9 +171,8 @@ object ArthasResponseParser {
                 }
                 appendLine()
                 appendLine("说明：")
-                appendLine("命令已在目标 JVM 中调度，插件不等待方法返回。")
-                appendLine("适合断点调试：即使线程在断点处暂停也不会触发插件侧超时。")
-                appendLine("请在 Debugger 中继续执行，或在应用日志中查看方法执行结果。")
+                appendLine("命令已在目标 JVM 中调度。")
+                appendLine("若在等待上限内没有拿到返回值，多半是目标线程停在断点。继续执行后请重新调用。")
             }
         } catch (_: Exception) {
             response.body
@@ -171,7 +220,7 @@ object ArthasResponseParser {
                 }
                 appendLine()
                 appendLine("建议：")
-                appendLine("1. 勾选「异步执行」：适合断点调试，不等待返回结果")
+                appendLine("1. 勾选「异步执行」：命令在目标 JVM 后台运行，断点不会触发插件 HTTP 超时")
                 appendLine("2. 在 Settings → Other Settings → Run Anywhere 中增大「同步执行超时」")
                 appendLine("3. 确认目标方法不会在目标 JVM 中死锁或无限阻塞")
             }

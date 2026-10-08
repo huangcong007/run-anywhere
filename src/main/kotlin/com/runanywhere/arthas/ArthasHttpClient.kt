@@ -46,6 +46,9 @@ class ArthasHttpClient(
     @Volatile
     private var sessionId: String? = null
 
+    @Volatile
+    private var consumerId: String? = null
+
     fun isAvailable(): Boolean {
         return try {
             val request = HttpRequest.newBuilder()
@@ -98,6 +101,23 @@ class ArthasHttpClient(
         return ArthasResponse(-1, "", false, "Failed to submit async command after session retry")
     }
 
+    /**
+     * 拉取当前 HTTP session 上 async_exec 已经产生的输出。
+     * consumerId 缺失时退回 sessionId，兼容只返回 sessionId 的 Arthas。
+     */
+    fun pullResults(): ArthasResponse {
+        val sid = sessionId ?: return ArthasResponse(-1, "", false, "No Arthas HTTP session")
+        val cid = consumerId ?: sid
+        return post(
+            payload = mapOf(
+                "action" to "pull_results",
+                "sessionId" to sid,
+                "consumerId" to cid
+            ),
+            timeoutMs = 10_000
+        )
+    }
+
     fun stop(): ArthasResponse {
         val response = exec("stop")
         clearSession()
@@ -106,6 +126,7 @@ class ArthasHttpClient(
 
     fun clearSession() {
         sessionId = null
+        consumerId = null
     }
 
     /**
@@ -124,6 +145,7 @@ class ArthasHttpClient(
             return null
         }
         sessionId = sid
+        consumerId = parseJsonField(response.body, "consumerId") ?: sid
         LOG.info("Arthas HTTP session initialized: $sid")
         return sid
     }
@@ -139,9 +161,11 @@ class ArthasHttpClient(
         }
     }
 
-    private fun parseSessionId(body: String): String? {
+    private fun parseSessionId(body: String): String? = parseJsonField(body, "sessionId")
+
+    private fun parseJsonField(body: String, field: String): String? {
         return try {
-            GSON.fromJson(body, JsonObject::class.java)?.get("sessionId")?.asString
+            GSON.fromJson(body, JsonObject::class.java)?.get(field)?.asString
         } catch (_: Exception) {
             null
         }

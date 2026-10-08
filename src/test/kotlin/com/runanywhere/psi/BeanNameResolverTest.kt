@@ -1,6 +1,8 @@
 package com.runanywhere.psi
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class BeanNameResolverTest {
@@ -29,6 +31,47 @@ class BeanNameResolverTest {
         assertEquals("myBean", BeanNameResolver.extractBeanNameFromAttribute("\"myBean\""))
         assertEquals(null, BeanNameResolver.extractBeanNameFromAttribute("\"\""))
         assertEquals(null, BeanNameResolver.extractBeanNameFromAttribute(null))
+    }
+
+    @Test
+    fun `factory bean name uses the only candidate`() {
+        assertEquals("userService", BeanNameResolver.chooseFactoryBeanName(listOf("userService", "userService"), "other"))
+        assertEquals(null, BeanNameResolver.chooseFactoryBeanName(listOf("repo", "other"), "userService"))
+    }
+
+    @Test
+    fun `factory bean name prefers the spring default when several differ`() {
+        assertEquals(
+            "userService",
+            BeanNameResolver.chooseFactoryBeanName(listOf("userService", "backup"), "userService")
+        )
+        assertEquals(null, BeanNameResolver.chooseFactoryBeanName(listOf("alpha", "beta"), "userService"))
+        assertEquals(null, BeanNameResolver.chooseFactoryBeanName(emptyList(), "userService"))
+    }
+
+    @Test
+    fun `explicit bean name reads the first string literal`() {
+        assertEquals("userService", BeanNameResolver.firstExplicitName("{\"userService\", \"alias\"}"))
+        assertEquals("userService", BeanNameResolver.firstExplicitName("\"userService\""))
+        assertEquals(null, BeanNameResolver.firstExplicitName("{}"))
+        assertEquals(null, BeanNameResolver.firstExplicitName("BeanIds.USER"))
+    }
+}
+
+class TypeDescTest {
+
+    @Test
+    fun `nested generic displays inner arguments`() {
+        val desc = TypeDesc(
+            "java.util.Map",
+            listOf(
+                TypeDesc("java.lang.String"),
+                TypeDesc("java.util.List", listOf(TypeDesc("com.example.User")))
+            )
+        )
+        assertEquals("java.util.Map<java.lang.String, java.util.List<com.example.User>>", desc.display())
+        assertTrue(desc.isNested())
+        assertFalse(TypeDesc("java.util.List", listOf(TypeDesc("com.example.User"))).isNested())
     }
 }
 

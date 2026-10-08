@@ -2,6 +2,7 @@ package com.runanywhere.ui
 
 import com.runanywhere.psi.MethodMetadata
 import com.runanywhere.psi.ParamTypeKind
+import com.runanywhere.psi.TypeDesc
 import com.runanywhere.settings.JsonLibrary
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -144,6 +145,7 @@ class JsonDeserializeOgnlBuilderTest {
         val result = JsonDeserializeOgnlBuilder.build("[[{\"id\":1}]]", matrixParam, JsonLibrary.JACKSON)
         assertEquals(
             "(#_raMapper=new com.fasterxml.jackson.databind.ObjectMapper()," +
+                "#_raMapper.findAndRegisterModules()," +
                 "#_raMapper.readValue(\"[[{\\\"id\\\":1}]]\"," +
                 "#_raMapper.getTypeFactory().constructArrayType(" +
                 "@java.lang.reflect.Array@newInstance(@com.example.User@class,0).getClass())))",
@@ -260,6 +262,56 @@ class JsonDeserializeOgnlBuilderTest {
         val result = JsonDeserializeOgnlBuilder.build("[{\"id\":1}]", listParam, JsonLibrary.AUTO)
         assertTrue(result.contains("com.alibaba.fastjson2.util.ParameterizedTypeImpl"))
         assertTrue(result.contains("@java.util.List@class"))
+    }
+
+    @Test
+    fun `nested list keeps inner type arguments`() {
+        val nestedList = TypeDesc(
+            "java.util.List",
+            listOf(TypeDesc("java.util.List", listOf(TypeDesc("com.example.User"))))
+        )
+        val param = MethodMetadata.ParamInfo(
+            name = "groups",
+            type = "java.util.List",
+            kind = ParamTypeKind.COLLECTION,
+            elementType = "java.util.List",
+            typeDesc = nestedList
+        )
+        val jackson = JsonDeserializeOgnlBuilder.build("[[{\"id\":1}]]", param, JsonLibrary.JACKSON)
+        assertTrue(jackson.contains("constructCollectionType(@java.util.List@class,#_raMapper.getTypeFactory().constructCollectionType"))
+        assertTrue(jackson.contains("@com.example.User@class"))
+        assertTrue(jackson.contains("findAndRegisterModules()"))
+
+        val gson = JsonDeserializeOgnlBuilder.build("[[{\"id\":1}]]", param, JsonLibrary.GSON)
+        assertTrue(gson.contains("TypeToken@getParameterized(@java.util.List@class,@com.google.gson.reflect.TypeToken@getParameterized"))
+        assertTrue(gson.contains("@com.example.User@class"))
+
+        val fastjson2 = JsonDeserializeOgnlBuilder.build("[[{\"id\":1}]]", param, JsonLibrary.FASTJSON2)
+        assertTrue(fastjson2.contains("new com.alibaba.fastjson2.util.ParameterizedTypeImpl(new java.lang.reflect.Type[]{(@com.example.User@class)},null,(@java.util.List@class))"))
+        assertTrue(fastjson2.contains("null,(@java.util.List@class))"))
+    }
+
+    @Test
+    fun `nested map keeps the list value type`() {
+        val nestedMap = TypeDesc(
+            "java.util.Map",
+            listOf(
+                TypeDesc("java.lang.String"),
+                TypeDesc("java.util.List", listOf(TypeDesc("com.example.User")))
+            )
+        )
+        val param = MethodMetadata.ParamInfo(
+            name = "grouped",
+            type = "java.util.Map",
+            kind = ParamTypeKind.MAP,
+            mapKeyType = "java.lang.String",
+            mapValueType = "java.util.List",
+            typeDesc = nestedMap
+        )
+        val jackson = JsonDeserializeOgnlBuilder.build("{}", param, JsonLibrary.JACKSON)
+        assertTrue(jackson.contains("constructMapType(@java.util.Map@class"))
+        assertTrue(jackson.contains("constructCollectionType(@java.util.List@class"))
+        assertTrue(jackson.contains("@com.example.User@class"))
     }
 
     @Test

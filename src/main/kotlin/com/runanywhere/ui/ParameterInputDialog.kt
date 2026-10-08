@@ -109,6 +109,7 @@ class ParameterInputDialog(
             val placeholder = when {
                 param.isEnum -> "枚举常量名，如 ACTIVE"
                 param.type == "long" || param.type == "java.lang.Long" -> "数字，如 123 或 123L"
+                param.type.startsWith("java.time.") -> "ISO-8601，如 2026-10-08T15:04:05"
                 else -> "输入值，留空表示 null"
             }
             JBTextField(20).apply {
@@ -118,10 +119,13 @@ class ParameterInputDialog(
         }
     }
 
-    private fun formatTypeLabel(param: MethodMetadata.ParamInfo): String = when (param.kind) {
-        ParamTypeKind.COLLECTION -> "${param.type}<${param.elementType ?: "?"}>"
-        ParamTypeKind.MAP -> "${param.type}<${param.mapKeyType ?: "?"}, ${param.mapValueType ?: "?"}>"
-        else -> param.type
+    private fun formatTypeLabel(param: MethodMetadata.ParamInfo): String {
+        param.typeDesc?.takeIf { it.args.isNotEmpty() || it.arrayDimensions > 0 }?.let { return it.display() }
+        return when (param.kind) {
+            ParamTypeKind.COLLECTION -> "${param.type}<${param.elementType ?: "?"}>"
+            ParamTypeKind.MAP -> "${param.type}<${param.mapKeyType ?: "?"}, ${param.mapValueType ?: "?"}>"
+            else -> param.type
+        }
     }
 
     private fun setInputEnabled(component: JComponent, enabled: Boolean) {

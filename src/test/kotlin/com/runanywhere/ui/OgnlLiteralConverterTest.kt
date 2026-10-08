@@ -54,6 +54,15 @@ class OgnlLiteralConverterTest {
     }
 
     @Test
+    fun `java time uses parse`() {
+        val literal = OgnlLiteralConverter.toOgnlLiteral("2026-10-08", "java.time.LocalDate", false)
+        assertEquals("@java.time.LocalDate@parse(\"2026-10-08\")", literal)
+        val param = MethodMetadata.ParamInfo("day", "java.time.LocalDate")
+        assertTrue(OgnlLiteralConverter.isSupportedInputType(param))
+        assertNull(OgnlLiteralConverter.validate("2026-10-08", param))
+    }
+
+    @Test
     fun `enum uses ognl enum syntax`() {
         assertEquals(
             "@com.example.Status@ACTIVE",

@@ -15,6 +15,15 @@ object OgnlLiteralConverter {
         "java.lang.Float", "java.lang.Double"
     )
 
+    private val TEMPORAL_TYPES = setOf(
+        "java.time.LocalDate",
+        "java.time.LocalDateTime",
+        "java.time.LocalTime",
+        "java.time.Instant",
+        "java.time.OffsetDateTime",
+        "java.time.ZonedDateTime"
+    )
+
     fun toOgnlLiteral(raw: String, param: MethodMetadata.ParamInfo): String =
         toOgnlLiteral(raw, param.type, param.isPrimitive, param.isEnum, param)
 
@@ -43,6 +52,7 @@ object OgnlLiteralConverter {
 
         return when {
             isEnum -> "@$type@$trimmed"
+            type in TEMPORAL_TYPES -> "@$type@parse(${ognlStringExpr(trimmed)})"
             type == "long" || type == "java.lang.Long" ->
                 if (trimmed.endsWith("L", ignoreCase = true)) trimmed else "${trimmed}L"
             isPrimitive && type != "boolean" && type != "char" -> trimmed
@@ -80,7 +90,13 @@ object OgnlLiteralConverter {
             "java.lang.Double", "Double",
             "java.lang.Character", "Character",
             "java.math.BigDecimal",
-            "java.math.BigInteger" -> true
+            "java.math.BigInteger",
+            "java.time.LocalDate",
+            "java.time.LocalDateTime",
+            "java.time.LocalTime",
+            "java.time.Instant",
+            "java.time.OffsetDateTime",
+            "java.time.ZonedDateTime" -> true
             else -> false
         }
     }
