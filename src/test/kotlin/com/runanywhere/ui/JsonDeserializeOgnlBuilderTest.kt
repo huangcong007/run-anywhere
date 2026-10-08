@@ -23,6 +23,13 @@ class JsonDeserializeOgnlBuilderTest {
         elementType = "com.example.User"
     )
 
+    private val arrayParam = MethodMetadata.ParamInfo(
+        name = "users",
+        type = "com.example.User[]",
+        kind = ParamTypeKind.ARRAY,
+        elementType = "com.example.User"
+    )
+
     @Test
     fun `jackson object deserialization`() {
         val result = JsonDeserializeOgnlBuilder.build("{\"id\":1}", userParam, JsonLibrary.JACKSON)
@@ -63,17 +70,59 @@ class JsonDeserializeOgnlBuilderTest {
 
     @Test
     fun `fastjson2 array deserialization`() {
-        val arrayParam = MethodMetadata.ParamInfo(
-            name = "users",
-            type = "com.example.User[]",
-            kind = ParamTypeKind.ARRAY,
-            elementType = "com.example.User"
-        )
         val result = JsonDeserializeOgnlBuilder.build("[{\"id\":1}]", arrayParam, JsonLibrary.FASTJSON2)
         assertEquals(
-            "(@com.alibaba.fastjson2.JSONObject@parseObject(\"[{\\\"id\\\":1}]\",@com.example.User[]@class))",
+            "(@com.alibaba.fastjson2.JSONObject@parseObject(\"[{\\\"id\\\":1}]\"," +
+                "@java.lang.reflect.Array@newInstance(@com.example.User@class,0).getClass()))",
             result
         )
+    }
+
+    @Test
+    fun `gson array deserialization`() {
+        val result = JsonDeserializeOgnlBuilder.build("[{\"id\":1}]", arrayParam, JsonLibrary.GSON)
+        assertEquals(
+            "(#_raGson=new com.google.gson.Gson(),#_raGson.fromJson(\"[{\\\"id\\\":1}]\"," +
+                "@java.lang.reflect.Array@newInstance(@com.example.User@class,0).getClass()))",
+            result
+        )
+    }
+
+    @Test
+    fun `fastjson1 array deserialization`() {
+        val result = JsonDeserializeOgnlBuilder.build("[{\"id\":1}]", arrayParam, JsonLibrary.FASTJSON)
+        assertEquals(
+            "(@com.alibaba.fastjson.JSONObject@parseObject(\"[{\\\"id\\\":1}]\"," +
+                "@java.lang.reflect.Array@newInstance(@com.example.User@class,0).getClass()))",
+            result
+        )
+    }
+
+    // OGNL 没有 `@X[]@class` 这种语法（解析期 ParseException），任何分支都不能再产出它
+    @Test
+    fun `no branch uses invalid array class syntax`() {
+        val mapParam = MethodMetadata.ParamInfo(
+            name = "userMap",
+            type = "java.util.Map",
+            kind = ParamTypeKind.MAP,
+            mapKeyType = "java.lang.String",
+            mapValueType = "com.example.User"
+        )
+        val params = listOf(userParam, listParam, arrayParam, mapParam)
+        for (library in JsonLibrary.values()) {
+            for (param in params) {
+                val json = if (param.kind == ParamTypeKind.MAP || param.kind == ParamTypeKind.OBJECT) {
+                    "{\"id\":1}"
+                } else {
+                    "[{\"id\":1}]"
+                }
+                val expr = JsonDeserializeOgnlBuilder.build(json, param, library)
+                assertFalse(
+                    expr.contains("[]@class"),
+                    "$library/${param.kind} generated invalid array class literal: $expr"
+                )
+            }
+        }
     }
 
     @Test

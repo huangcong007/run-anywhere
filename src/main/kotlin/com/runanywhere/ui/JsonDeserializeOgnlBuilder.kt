@@ -14,12 +14,17 @@ object JsonDeserializeOgnlBuilder {
 
     // fastjson2 的 JSON 是抽象类，OGNL 的 @Class@method 语法无法在抽象类上调用静态方法
     // （报 "No method accessor for interface ..."），改用具体子类：
-    // - parseObject → JSONObject；数组同样走 parseObject + X[]@class，因为 parseArray
-    //   运行时返回 ArrayList，其上没有 toArray(Class) 重载可用
+    // - parseObject → JSONObject；数组同样走 parseObject + 数组 Class
+    //   （parseArray 运行时返回 ArrayList，其上没有 toArray(Class) 重载可用）
     // - parseArray  → JSONArray（JSONObject 无 parseArray(String, Class) 重载）
     private const val FASTJSON2_OBJECT = "com.alibaba.fastjson2.JSONObject"
     private const val FASTJSON2_ARRAY = "com.alibaba.fastjson2.JSONArray"
     private const val FASTJSON = "com.alibaba.fastjson.JSONObject"
+
+    // OGNL 的 `@X[]@class` 不是合法语法（解析期 ParseException: Encountered "["），
+    // 数组 Class 只能用反射构造出来再取类型；基本类型与多维数组同样适用。
+    private fun arrayClassExpr(componentType: String): String =
+        "@java.lang.reflect.Array@newInstance(@$componentType@class,0).getClass()"
 
     fun build(json: String, param: MethodMetadata.ParamInfo, library: JsonLibrary): String {
         val escapedJson = OgnlLiteralConverter.escapeForOgnlDoubleQuotedString(json)
@@ -87,7 +92,7 @@ object JsonDeserializeOgnlBuilder {
             ParamTypeKind.OBJECT -> "@${param.type}@class"
             ParamTypeKind.ARRAY -> {
                 val componentType = param.elementType ?: param.type.removeSuffix("[]")
-                "@$componentType[]@class"
+                arrayClassExpr(componentType)
             }
             ParamTypeKind.COLLECTION -> {
                 val elementType = param.elementType ?: "java.lang.Object"
@@ -111,7 +116,7 @@ object JsonDeserializeOgnlBuilder {
                 "@$FASTJSON2_OBJECT@parseObject(\"$escapedJson\",@${param.type}@class)"
             ParamTypeKind.ARRAY -> {
                 val componentType = param.elementType ?: param.type.removeSuffix("[]")
-                "@$FASTJSON2_OBJECT@parseObject(\"$escapedJson\",@$componentType[]@class)"
+                "@$FASTJSON2_OBJECT@parseObject(\"$escapedJson\",${arrayClassExpr(componentType)})"
             }
             ParamTypeKind.COLLECTION -> {
                 val elementType = param.elementType ?: "java.lang.Object"
@@ -130,8 +135,7 @@ object JsonDeserializeOgnlBuilder {
                 "@$FASTJSON@parseObject(\"$escapedJson\",@${param.type}@class)"
             ParamTypeKind.ARRAY -> {
                 val componentType = param.elementType ?: param.type.removeSuffix("[]")
-                "@$FASTJSON@parseArray(\"$escapedJson\",@$componentType@class).toArray(@" +
-                    "$componentType[]@class)"
+                "@$FASTJSON@parseObject(\"$escapedJson\",${arrayClassExpr(componentType)})"
             }
             ParamTypeKind.COLLECTION -> {
                 val elementType = param.elementType ?: "java.lang.Object"
