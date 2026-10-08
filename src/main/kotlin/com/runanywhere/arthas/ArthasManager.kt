@@ -7,7 +7,9 @@ import java.io.File
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.URI
 import java.net.URL
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -19,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * 每个 PID 维护独立的 [ArthasSession]（独立 HTTP 端口 + HTTP 客户端），
  * 支持同时对多个 JVM 进行 attach 和方法调用。
+ * 端口分配和会话表用管理器锁保护；Jar 下载和就绪等待只占用该 PID 的锁。
  */
 class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) {
 
@@ -29,6 +32,9 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
         const val DEFAULT_HTTP_PORT = 8563
         const val DEFAULT_TELNET_PORT = 3658
         private const val MAX_PORT_OFFSET = 100
+        private const val SESSION_TIMEOUT_SECONDS = 1800
+        private const val CONNECT_TIMEOUT_MS = 15_000
+        private const val READ_TIMEOUT_MS = 60_000
         private const val ARTHAS_RESOURCE_PATH = "/arthas/arthas-boot.jar"
 
         private fun arthasStandardHome(): Path =
@@ -43,70 +49,117 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
     }
 
     private val sessions = ConcurrentHashMap<Long, ArthasSession>()
+    private val reservedPorts = ConcurrentHashMap.newKeySet<Int>()
+    private val pidLocks = ConcurrentHashMap<Long, Any>()
     private val attachingPids = ConcurrentHashMap.newKeySet<Long>()
+
+    private fun pidLock(pid: Long): Any = pidLocks.computeIfAbsent(pid) { Any() }
 
     @Synchronized
     private fun ensureArthasJar(): Path {
         val standardJar = arthasStandardJar()
-        if (Files.exists(standardJar) && Files.size(standardJar) > 0) {
+        if (isUsableJar(standardJar)) {
             LOG.info("Using Arthas standard install at $standardJar")
             return standardJar
         }
 
         val jarPath = arthasJarPath()
-        if (Files.exists(jarPath) && Files.size(jarPath) > 0) {
-            return jarPath
-        }
+        if (isUsableJar(jarPath)) return jarPath
 
         Files.createDirectories(arthasHomeDir())
         val resourceUrl = javaClass.getResource(ARTHAS_RESOURCE_PATH)
-            ?: throw IllegalStateException(
-                "Bundled arthas-boot.jar not found at $ARTHAS_RESOURCE_PATH. " +
-                    "Run './gradlew downloadArthasBoot' before building."
-            )
+        if (resourceUrl != null) {
+            try {
+                copyToFile(resourceUrl, jarPath)
+                if (isUsableJar(jarPath)) {
+                    LOG.info("Extracted arthas-boot.jar to $jarPath")
+                    return jarPath
+                }
+            } catch (e: Exception) {
+                LOG.warn("Failed to extract bundled arthas-boot.jar", e)
+            }
+            Files.deleteIfExists(jarPath)
+        } else {
+            LOG.warn("Bundled arthas-boot.jar not found at $ARTHAS_RESOURCE_PATH")
+        }
 
-        try {
-            resourceUrl.openStream().use { input ->
-                Files.copy(input, jarPath, StandardCopyOption.REPLACE_EXISTING)
-            }
-            LOG.info("Extracted arthas-boot.jar to $jarPath")
-        } catch (e: Exception) {
-            if (!Files.exists(jarPath)) {
-                downloadArthasJar(jarPath)
-            }
+        val url = URI(
+            "https://repo1.maven.org/maven2/com/taobao/arthas/arthas-boot/" +
+                "$ARTHAS_VERSION/arthas-boot-$ARTHAS_VERSION.jar"
+        ).toURL()
+        LOG.info("Downloading arthas-boot.jar from $url")
+        copyToFile(url, jarPath)
+        if (!isUsableJar(jarPath)) {
+            Files.deleteIfExists(jarPath)
+            throw IllegalStateException("Downloaded arthas-boot.jar is invalid")
         }
         return jarPath
     }
 
-    private fun downloadArthasJar(target: Path) {
-        val url = URL(
-            "https://repo1.maven.org/maven2/com/taobao/arthas/arthas-boot/" +
-                "$ARTHAS_VERSION/arthas-boot-$ARTHAS_VERSION.jar"
-        )
-        LOG.info("Downloading arthas-boot.jar from $url")
-        url.openStream().use { input ->
-            Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING)
+    private fun copyToFile(url: URL, target: Path) {
+        Files.createDirectories(target.parent)
+        val part = target.resolveSibling("${target.fileName}.part")
+        val connection = url.openConnection()
+        connection.connectTimeout = CONNECT_TIMEOUT_MS
+        connection.readTimeout = READ_TIMEOUT_MS
+        try {
+            connection.getInputStream().use { input ->
+                Files.newOutputStream(part).use { output -> input.copyTo(output) }
+            }
+            if (!isUsableJar(part)) {
+                throw IllegalStateException("File is not a jar: $url")
+            }
+            try {
+                Files.move(part, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(part, target, StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            Files.deleteIfExists(part)
+        }
+    }
+
+    private fun isUsableJar(path: Path): Boolean {
+        if (!Files.isRegularFile(path) || Files.size(path) < 4) return false
+        return Files.newInputStream(path).use { input ->
+            val header = ByteArray(2)
+            input.read(header) == 2 && header[0] == 0x50.toByte() && header[1] == 0x4B.toByte()
         }
     }
 
     /**
-     * Attach Arthas 到目标 JVM。
+     * Attach Arthas 到目标 JVM。同一 PID 串行，不同 PID 可以并行等待就绪。
      */
-    @Synchronized
     fun attach(pid: Long): Boolean {
-        val existing = sessions[pid]
-        if (existing != null) {
-            if (existing.httpClient.isAvailable()) {
-                return true
+        synchronized(pidLock(pid)) {
+            val existing = sessions[pid]
+            if (existing != null) {
+                if (existing.httpClient.isAvailable()) return true
+                detachLocked(pid)
             }
-            detach(pid)
+            return try {
+                attachNew(pid)
+            } catch (e: Exception) {
+                LOG.error("Failed to attach Arthas to PID $pid", e)
+                false
+            }
         }
+    }
 
-        return try {
-            val jarPath = ensureArthasJar()
-            val httpPort = allocateHttpPort()
-            val telnetPort = allocateTelnetPort()
-            LOG.info("Attaching Arthas to PID $pid (http=$httpPort, telnet=$telnetPort) using $jarPath")
+    private fun attachNew(pid: Long): Boolean {
+        val jarPath = ensureArthasJar()
+        var httpPort: Int? = null
+        var telnetPort: Int? = null
+        var process: Process? = null
+        var published = false
+        try {
+            synchronized(this) {
+                httpPort = allocatePort(DEFAULT_HTTP_PORT)
+                telnetPort = allocatePort(DEFAULT_TELNET_PORT)
+            }
+            val http = httpPort ?: return false
+            val telnet = telnetPort ?: return false
+            LOG.info("Attaching Arthas to PID $pid (http=$http, telnet=$telnet) using $jarPath")
 
             val processBuilder = ProcessBuilder(
                 System.getProperty("java.home") + File.separator + "bin" + File.separator + "java",
@@ -118,33 +171,43 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
                 "-jar",
                 jarPath.toString(),
                 pid.toString(),
-                "--telnet-port", telnetPort.toString(),
-                "--http-port", httpPort.toString(),
+                "--target-ip", "127.0.0.1",
+                "--telnet-port", telnet.toString(),
+                "--http-port", http.toString(),
                 "--tunnel-server", "disabled",
-                "--session-timeout", "0",
+                "--session-timeout", SESSION_TIMEOUT_SECONDS.toString(),
                 "--attach-only"
             ).apply {
                 redirectErrorStream(true)
                 directory(jarPath.parent.toFile())
             }
 
-            val process = processBuilder.start()
-            val httpClient = ArthasHttpClient(port = httpPort)
-
+            process = processBuilder.start()
+            val httpClient = ArthasHttpClient(port = http)
             startOutputReader(process, pid)
-
-            val ready = waitForHttpReady(httpClient, httpPort, timeoutMs = 60000)
-            if (ready) {
-                sessions[pid] = ArthasSession(pid, httpPort, telnetPort, process, httpClient)
-                LOG.info("Arthas attached to PID $pid on HTTP port $httpPort")
-            } else {
+            val ready = waitForHttpReady(httpClient, http, timeoutMs = 60000)
+            if (!ready) {
                 LOG.warn("Arthas attach to PID $pid timed out. process alive=${process.isAlive}")
-                destroyProcess(process)
+                return false
             }
-            ready
-        } catch (e: Exception) {
-            LOG.error("Failed to attach Arthas to PID $pid", e)
-            false
+            synchronized(this) {
+                sessions[pid] = ArthasSession(pid, http, telnet, process, httpClient)
+                published = true
+            }
+            LOG.info("Arthas attached to PID $pid on HTTP port $http")
+            return true
+        } finally {
+            if (!published) {
+                process?.let { destroyProcess(it) }
+            }
+            val http = httpPort
+            val telnet = telnetPort
+            if (http != null || telnet != null) {
+                synchronized(this) {
+                    if (http != null) reservedPorts.remove(http)
+                    if (telnet != null) reservedPorts.remove(telnet)
+                }
+            }
         }
     }
 
@@ -163,9 +226,14 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
         else session.httpClient.exec(command, execTimeout)
     }
 
-    @Synchronized
     fun detach(pid: Long) {
-        val session = sessions.remove(pid) ?: return
+        synchronized(pidLock(pid)) {
+            detachLocked(pid)
+        }
+    }
+
+    private fun detachLocked(pid: Long) {
+        val session = synchronized(this) { sessions.remove(pid) } ?: return
         try {
             session.httpClient.stop()
         } catch (e: Exception) {
@@ -176,7 +244,8 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
     }
 
     fun detachAll() {
-        sessions.keys.toList().forEach { detach(it) }
+        val pids = synchronized(this) { sessions.keys.toList() }
+        pids.forEach { detach(it) }
     }
 
     fun isAttached(pid: Long): Boolean {
@@ -241,16 +310,17 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
         }
     }
 
-    private fun allocateHttpPort(): Int = allocatePort(DEFAULT_HTTP_PORT, sessions.values.map { it.httpPort })
-
-    private fun allocateTelnetPort(): Int = allocatePort(DEFAULT_TELNET_PORT, sessions.values.map { it.telnetPort })
-
-    private fun allocatePort(startPort: Int, usedPorts: Collection<Int>): Int {
+    private fun allocatePort(startPort: Int): Int {
+        val occupied = HashSet(reservedPorts)
+        sessions.values.forEach {
+            occupied.add(it.httpPort)
+            occupied.add(it.telnetPort)
+        }
         for (offset in 0 until MAX_PORT_OFFSET) {
             val port = startPort + offset
-            if (port !in usedPorts && isPortFree(port)) {
-                return port
-            }
+            if (port in occupied || !isPortFree(port)) continue
+            reservedPorts.add(port)
+            return port
         }
         throw IllegalStateException("No free port found starting from $startPort")
     }

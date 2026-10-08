@@ -5,6 +5,7 @@ import com.runanywhere.psi.ParamTypeKind
 import com.runanywhere.settings.JsonLibrary
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -14,6 +15,30 @@ class OgnlLiteralConverterTest {
     fun `string is quoted and escaped`() {
         assertEquals("\"hello\"", OgnlLiteralConverter.toOgnlLiteral("hello", "java.lang.String", false))
         assertEquals("\"say \\\"hi\\\"\"", OgnlLiteralConverter.toOgnlLiteral("say \"hi\"", "String", false))
+    }
+
+    @Test
+    fun `string apostrophe is concatenated without a raw quote`() {
+        val literal = OgnlLiteralConverter.toOgnlLiteral("it's", "java.lang.String", false)
+        assertFalse(literal.contains("'"))
+        assertTrue(literal.contains("toChars(39)"))
+    }
+
+    @Test
+    fun `numeric and enum literals are validated`() {
+        val intParam = MethodMetadata.ParamInfo("n", "int", isPrimitive = true)
+        assertNull(OgnlLiteralConverter.validate("12", intParam))
+        assertTrue(OgnlLiteralConverter.validate("1); @java.lang.System@gc()", intParam) != null)
+
+        val boolParam = MethodMetadata.ParamInfo("flag", "boolean", isPrimitive = true)
+        assertNull(OgnlLiteralConverter.validate("true", boolParam))
+        assertTrue(OgnlLiteralConverter.validate("yes", boolParam) != null)
+
+        val enumParam = MethodMetadata.ParamInfo(
+            "status", "com.example.Status", kind = ParamTypeKind.ENUM, isEnum = true
+        )
+        assertNull(OgnlLiteralConverter.validate("ACTIVE", enumParam))
+        assertTrue(OgnlLiteralConverter.validate("ACTIVE.toString()", enumParam) != null)
     }
 
     @Test

@@ -49,6 +49,11 @@ object ArthasResponseParser {
         return true
     }
 
+    fun parseIntValue(response: ArthasResponse): Int? {
+        if (!response.isSuccess) return null
+        return parse(response).trim().toIntOrNull()
+    }
+
     fun parse(response: ArthasResponse, asyncMode: Boolean = false): String {
         if (response.body.isNotEmpty()) {
             if (asyncMode && isAsyncSubmitted(response)) {

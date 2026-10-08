@@ -19,6 +19,15 @@ object BeanNameResolver {
     }
 
     /**
+     * Spring [org.springframework.context.annotation.AnnotationBeanNameGenerator] 的默认名。
+     * [nestedSimpleNames] 从外层到内层，例如 ["Outer", "Inner"] → outer.Inner。
+     */
+    fun springDefaultBeanName(nestedSimpleNames: List<String>): String? {
+        if (nestedSimpleNames.isEmpty() || nestedSimpleNames.any { it.isBlank() }) return null
+        return decapitalize(nestedSimpleNames.joinToString("."))
+    }
+
+    /**
      * 从注解属性文本中提取 Bean 名（去掉引号）。
      */
     fun extractBeanNameFromAttribute(attributeText: String?): String? =

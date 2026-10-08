@@ -1,9 +1,8 @@
 package com.runanywhere.process
 
-import com.intellij.execution.ExecutionManager
 import com.intellij.execution.process.OSProcessHandler
-import com.intellij.execution.process.ProcessHandler
 import com.intellij.execution.ui.RunContentDescriptor
+import com.intellij.execution.ui.RunContentManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 
@@ -36,7 +35,7 @@ object RunningProcessDetector {
     fun getRunningProcesses(project: Project): List<RunningProcess> {
         val result = mutableListOf<RunningProcess>()
         try {
-            val contentManager = ExecutionManager.getInstance(project).getContentManager()
+            val contentManager = RunContentManager.getInstance(project)
             val descriptors = contentManager.getAllDescriptors()
             LOG.info("Found ${descriptors.size} run content descriptors")
             for (descriptor in descriptors) {
@@ -54,6 +53,16 @@ object RunningProcessDetector {
                     // 检查进程是否仍在运行
                     if (processHandler.isProcessTerminated) {
                         LOG.info("Descriptor '${descriptor.displayName}' process already terminated, skip")
+                        continue
+                    }
+                    val commandLine = try {
+                        processHandler.commandLine
+                    } catch (e: Exception) {
+                        LOG.info("Descriptor '${descriptor.displayName}' has no command line, skip")
+                        continue
+                    }
+                    if (!isTargetJvmCommand(commandLine)) {
+                        LOG.info("Descriptor '${descriptor.displayName}' is not a target JVM, skip")
                         continue
                     }
                     val pid = extractPid(processHandler)
@@ -134,4 +143,27 @@ object RunningProcessDetector {
      * 判断是否有运行中的进程。
      */
     fun hasRunningProcess(project: Project): Boolean = getRunningProcesses(project).isNotEmpty()
+
+    /**
+     * 只保留 java/javaw 启动的进程。Gradle 启动器不算目标应用。
+     */
+    internal fun isTargetJvmCommand(commandLine: String): Boolean {
+        val exe = executableName(commandLine)
+        if (exe != "java" && exe != "java.exe" && exe != "javaw" && exe != "javaw.exe") {
+            return false
+        }
+        val lower = commandLine.lowercase()
+        return !lower.contains("org.gradle.launcher") && !lower.contains("gradle-launcher")
+    }
+
+    internal fun executableName(commandLine: String): String {
+        val trimmed = commandLine.trim()
+        if (trimmed.isEmpty()) return ""
+        val token = if (trimmed.startsWith("\"")) {
+            trimmed.drop(1).substringBefore("\"")
+        } else {
+            trimmed.substringBefore(' ')
+        }
+        return token.substringAfterLast('\\').substringAfterLast('/').lowercase()
+    }
 }

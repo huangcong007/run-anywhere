@@ -152,6 +152,11 @@ class ParameterInputDialog(
                     return
                 }
             }
+            val literalError = OgnlLiteralConverter.validate(raw, param)
+            if (literalError != null) {
+                Messages.showErrorDialog(contentPanel, literalError, "参数格式错误")
+                return
+            }
         }
 
         ognlArgs = parameters.indices.map { i ->

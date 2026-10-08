@@ -23,7 +23,7 @@ data class ArthasResponse(
  * 支持同步 [exec] 与异步 [asyncExec]（fire-and-forget，适合断点调试场景）。
  */
 class ArthasHttpClient(
-    private val host: String = "localhost",
+    private val host: String = "127.0.0.1",
     private val port: Int = ArthasManager.DEFAULT_HTTP_PORT,
     private val connectTimeoutMs: Long = 5000,
     private val requestTimeoutMs: Long = 30000

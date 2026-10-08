@@ -10,6 +10,7 @@ object RunAnywhereSettings {
     private const val SECURITY_CONFIRMED_KEY = "run-anywhere.security.confirmed"
     private const val EXEC_TIMEOUT_SECONDS_KEY = "run-anywhere.exec-timeout-seconds"
     private const val ASYNC_EXECUTION_KEY = "run-anywhere.async-execution"
+    private const val WARMUP_ATTACH_KEY = "run-anywhere.warmup-attach"
     private const val JSON_LIBRARY_KEY = "run-anywhere.json-library"
 
     const val DEFAULT_EXEC_TIMEOUT_SECONDS = 300
@@ -43,6 +44,14 @@ object RunAnywhereSettings {
 
     fun setAsyncExecution(async: Boolean) {
         PropertiesComponent.getInstance().setValue(ASYNC_EXECUTION_KEY, async, true)
+    }
+
+    /** 进程启动后是否提前 Attach。默认关闭，避免未确认就向目标 JVM 注入 Arthas。 */
+    fun isWarmupAttach(): Boolean =
+        PropertiesComponent.getInstance().getBoolean(WARMUP_ATTACH_KEY, false)
+
+    fun setWarmupAttach(enabled: Boolean) {
+        PropertiesComponent.getInstance().setValue(WARMUP_ATTACH_KEY, enabled, false)
     }
 
     fun getJsonLibrary(): JsonLibrary {

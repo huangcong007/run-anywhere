@@ -1,6 +1,7 @@
 package com.runanywhere.arthas
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -29,8 +30,10 @@ class OgnlExpressionBuilderTest {
             springBeanName = "userService"
         )
         val command = OgnlExpressionBuilder.buildCommand(metadata, listOf("1L"))
+        assertTrue(command.contains("containsBean(\"userService\")"))
         assertTrue(command.contains("getBean(\"userService\")"))
         assertTrue(command.contains("findById(1L)"))
+        assertFalse(command.contains("instances[0].getBean"))
     }
 
     @Test
@@ -51,9 +54,32 @@ class OgnlExpressionBuilderTest {
     }
 
     @Test
-    fun `bean name with quotes is escaped`() {
-        val escaped = OgnlExpressionBuilder.escapeForSingleQuotedExpress("my\"bean")
-        assertEquals("my\\\"bean", escaped)
+    fun `instance index is selectable`() {
+        val metadata = com.runanywhere.psi.MethodMetadata(
+            className = "com.example.PlainService",
+            methodName = "run",
+            parameters = emptyList(),
+            isStatic = false,
+            springBeanName = null
+        )
+        val command = OgnlExpressionBuilder.buildCommand(metadata, emptyList(), instanceIndex = 2)
+        assertTrue(command.contains("instances[2].run()"))
+    }
+
+    @Test
+    fun `string apostrophe does not break the arthas quotes`() {
+        val metadata = com.runanywhere.psi.MethodMetadata(
+            className = "com.example.Utils",
+            methodName = "greet",
+            parameters = emptyList(),
+            isStatic = true,
+            springBeanName = null
+        )
+        val arg = com.runanywhere.ui.OgnlLiteralConverter.toOgnlLiteral("it's", "java.lang.String", false)
+        val command = OgnlExpressionBuilder.buildCommand(metadata, listOf(arg))
+        val inner = command.removePrefix("ognl '").substringBeforeLast("' -x")
+        assertFalse(inner.contains("'"))
+        assertTrue(inner.contains("toChars(39)"))
     }
 
     @Test

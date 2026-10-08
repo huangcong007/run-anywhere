@@ -49,6 +49,17 @@ class ArthasResponseParserTest {
     }
 
     @Test
+    fun `parses integer vmtool result`() {
+        val response = ArthasResponse(
+            statusCode = 200,
+            body = """{"body":{"results":[{"type":"vmtool","value":2}]}}""",
+            isSuccess = true
+        )
+        assertEquals(2, ArthasResponseParser.parseIntValue(response))
+        assertEquals(null, ArthasResponseParser.parseIntValue(ArthasResponse(-1, "", false, "x")))
+    }
+
+    @Test
     fun `detects async submitted execution`() {
         val body = """{"sessionId":"abc","state":"SCHEDULED","body":{"jobStatus":"READY","jobId":3,"command":"test"}}"""
         val response = ArthasResponse(200, body, true)

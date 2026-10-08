@@ -122,16 +122,25 @@ internal object ParameterTypeAnalyzer {
         return resolved != null && isAssignableTo(resolved, "java.util.Collection")
     }
 
+    /**
+     * 沿父类链检查类名，并检查每一层自己声明的接口。
+     * 这样 `class MyList extends ArrayList` 也能识别为 Collection。
+     */
     private fun isAssignableTo(clazz: PsiClass, superFqn: String): Boolean {
-        var current: PsiClass? = clazz
-        while (current != null) {
-            if (current.qualifiedName == superFqn) return true
-            current = current.superClass
+        val visited = HashSet<PsiClass>()
+        fun visit(start: PsiClass?): Boolean {
+            var current = start
+            while (current != null) {
+                if (!visited.add(current)) return false
+                if (current.qualifiedName == superFqn) return true
+                for (iface in current.interfaces) {
+                    if (visit(iface)) return true
+                }
+                current = current.superClass
+            }
+            return false
         }
-        for (iface in clazz.interfaces) {
-            if (iface.qualifiedName == superFqn || isAssignableTo(iface, superFqn)) return true
-        }
-        return false
+        return visit(clazz)
     }
 
     private fun typeFqn(psiType: PsiType): String =

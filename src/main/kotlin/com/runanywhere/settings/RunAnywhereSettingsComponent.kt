@@ -16,6 +16,7 @@ import javax.swing.JPanel
 class RunAnywhereSettingsComponent {
 
     private val asyncCheckBox = JBCheckBox("异步执行（不等待返回结果）")
+    private val warmupCheckBox = JBCheckBox("进程启动后预热 Attach")
     private val timeoutField = JBTextField(10)
     private val timeoutHintLabel = JBLabel()
     private val jsonLibraryCombo = ComboBox(
@@ -24,6 +25,7 @@ class RunAnywhereSettingsComponent {
 
     private val panel: JPanel = FormBuilder.createFormBuilder()
         .addComponent(asyncCheckBox)
+        .addComponent(warmupCheckBox)
         .addLabeledComponent("同步执行超时（秒）", timeoutField)
         .addComponent(timeoutHintLabel)
         .addLabeledComponent("对象参数 JSON 库", jsonLibraryCombo)
@@ -39,6 +41,9 @@ class RunAnywhereSettingsComponent {
         asyncCheckBox.toolTipText =
             "使用 Arthas async_exec 提交命令后立即返回，不等待方法执行完成。\n" +
                 "适合断点调试：目标线程在断点暂停时不会导致插件超时。"
+        warmupCheckBox.toolTipText =
+            "应用启动约 2 秒后自动 Attach。关闭时只在点击「运行方法」后注入 Arthas。\n" +
+                "HTTP 只监听 127.0.0.1，会话超时 30 分钟。"
         timeoutHintLabel.text =
             "同步执行时的 Arthas 超时（${RunAnywhereSettings.MIN_EXEC_TIMEOUT_SECONDS}-" +
                 "${RunAnywhereSettings.MAX_EXEC_TIMEOUT_SECONDS} 秒）。异步模式下忽略此项。"
@@ -49,6 +54,7 @@ class RunAnywhereSettingsComponent {
 
     fun isModified(): Boolean {
         return asyncCheckBox.isSelected != RunAnywhereSettings.isAsyncExecution() ||
+            warmupCheckBox.isSelected != RunAnywhereSettings.isWarmupAttach() ||
             timeoutField.text.trim() != RunAnywhereSettings.getExecTimeoutSeconds().toString() ||
             selectedJsonLibrary() != RunAnywhereSettings.getJsonLibrary()
     }
@@ -59,11 +65,13 @@ class RunAnywhereSettingsComponent {
             ?: RunAnywhereSettings.DEFAULT_EXEC_TIMEOUT_SECONDS
         RunAnywhereSettings.setExecTimeoutSeconds(timeoutSeconds)
         RunAnywhereSettings.setAsyncExecution(asyncCheckBox.isSelected)
+        RunAnywhereSettings.setWarmupAttach(warmupCheckBox.isSelected)
         RunAnywhereSettings.setJsonLibrary(selectedJsonLibrary())
     }
 
     fun reset() {
         asyncCheckBox.isSelected = RunAnywhereSettings.isAsyncExecution()
+        warmupCheckBox.isSelected = RunAnywhereSettings.isWarmupAttach()
         timeoutField.text = RunAnywhereSettings.getExecTimeoutSeconds().toString()
         selectJsonLibrary(RunAnywhereSettings.getJsonLibrary())
         updateTimeoutFieldState()

@@ -46,12 +46,10 @@ object OgnlLiteralConverter {
             type == "long" || type == "java.lang.Long" ->
                 if (trimmed.endsWith("L", ignoreCase = true)) trimmed else "${trimmed}L"
             isPrimitive && type != "boolean" && type != "char" -> trimmed
-            type == "java.lang.String" || type == "String" ->
-                "\"" + escapeString(trimmed) + "\""
+            type == "java.lang.String" || type == "String" -> ognlStringExpr(trimmed)
             type == "boolean" || type == "java.lang.Boolean" -> trimmed
             type in NUMERIC_TYPES -> trimmed
-            type == "char" || type == "java.lang.Character" ->
-                if (trimmed.length == 1) "'$trimmed'" else "'${escapeChar(trimmed)}'"
+            type == "char" || type == "java.lang.Character" -> charLiteral(trimmed)
             type == "java.math.BigDecimal" ->
                 "new java.math.BigDecimal(\"${escapeString(trimmed)}\")"
             type == "java.math.BigInteger" ->
@@ -87,6 +85,25 @@ object OgnlLiteralConverter {
         }
     }
 
+    /**
+     * 生成不含裸单引号的 OGNL 字符串表达式。
+     * Arthas 命令外层使用单引号，字符串里的 `'` 会把命令截断，因此拆成拼接。
+     */
+    internal fun ognlStringExpr(value: String): String {
+        if ('\'' !in value) {
+            return "\"" + escapeForOgnlDoubleQuotedString(value) + "\""
+        }
+        val apostrophe = "new java.lang.String(@java.lang.Character@toChars(39))"
+        val pieces = ArrayList<String>()
+        value.split('\'').forEachIndexed { index, part ->
+            if (index > 0) pieces.add(apostrophe)
+            if (part.isNotEmpty()) {
+                pieces.add("\"" + escapeForOgnlDoubleQuotedString(part) + "\"")
+            }
+        }
+        return pieces.joinToString(" + ").ifEmpty { apostrophe }
+    }
+
     internal fun escapeForOgnlDoubleQuotedString(value: String): String =
         value.replace("\\", "\\\\")
             .replace("\"", "\\\"")
@@ -94,9 +111,57 @@ object OgnlLiteralConverter {
             .replace("\r", "\\r")
             .replace("\t", "\\t")
 
+    /**
+     * @return 不合法时的提示；空输入和 JSON 参数返回 null（JSON 另行校验，空输入表示 null）
+     */
+    fun validate(raw: String, param: MethodMetadata.ParamInfo): String? {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty() || JsonInputValidator.requiresJsonInput(param.kind)) return null
+        if (!isSupportedInputType(param)) return null
+        if (param.isEnum) {
+            return if (trimmed.matches(ENUM_NAME)) null
+            else "参数 ${param.name} 需要枚举常量名，例如 ACTIVE。"
+        }
+        val type = param.type
+        return when {
+            type == "boolean" || type == "java.lang.Boolean" ->
+                if (trimmed == "true" || trimmed == "false") null
+                else "参数 ${param.name} 需要 true 或 false。"
+            type == "char" || type == "java.lang.Character" ->
+                if (trimmed.length == 1) null
+                else "参数 ${param.name} 需要一个字符。"
+            type == "long" || type == "java.lang.Long" ->
+                if (trimmed.matches(LONG_LITERAL)) null
+                else "参数 ${param.name} 需要整数，例如 123 或 123L。"
+            type == "float" || type == "double" ||
+                type == "java.lang.Float" || type == "java.lang.Double" ->
+                if (trimmed.matches(DECIMAL_LITERAL)) null
+                else "参数 ${param.name} 需要数字，例如 1.5。"
+            type == "java.math.BigDecimal" ->
+                if (trimmed.matches(BIG_DECIMAL_LITERAL)) null
+                else "参数 ${param.name} 需要数字，例如 99.99。"
+            type == "java.math.BigInteger" ->
+                if (trimmed.matches(INTEGER_LITERAL)) null
+                else "参数 ${param.name} 需要整数，例如 99。"
+            param.isPrimitive || type in NUMERIC_TYPES ->
+                if (trimmed.matches(INTEGER_LITERAL)) null
+                else "参数 ${param.name} 需要整数，例如 123。"
+            else -> null
+        }
+    }
+
+    private fun charLiteral(trimmed: String): String {
+        if (trimmed.length != 1) return "null"
+        val ch = trimmed[0]
+        return if (ch == '\'') "@java.lang.Character@toChars(39)[0]" else "'$ch'"
+    }
+
     private fun escapeString(s: String): String =
         s.replace("\\", "\\\\").replace("\"", "\\\"")
 
-    private fun escapeChar(s: String): String =
-        s.replace("\\", "\\\\").replace("'", "\\'")
+    private val ENUM_NAME = Regex("^[A-Za-z_][A-Za-z0-9_]*$")
+    private val INTEGER_LITERAL = Regex("^-?\\d+$")
+    private val LONG_LITERAL = Regex("^-?\\d+[lL]?$")
+    private val DECIMAL_LITERAL = Regex("^-?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?[fFdD]?$")
+    private val BIG_DECIMAL_LITERAL = Regex("^-?\\d+(\\.\\d+)?$")
 }

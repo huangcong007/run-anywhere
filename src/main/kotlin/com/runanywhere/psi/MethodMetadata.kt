@@ -72,8 +72,22 @@ object MethodMetadataExtractor {
      * 简化泛型类型显示，保留外层类型名。
      * 例：java.util.List<java.lang.String> → java.util.List
      */
-    internal fun simplifyType(canonicalText: String): String =
-        canonicalText.substringBefore("<").ifEmpty { canonicalText }
+    /**
+     * 去掉泛型实参，保留尖括号之外的数组括号。
+     * 例：java.util.List<java.lang.String>[] → java.util.List[]
+     */
+    internal fun simplifyType(canonicalText: String): String {
+        val simplified = StringBuilder()
+        var depth = 0
+        for (ch in canonicalText) {
+            when (ch) {
+                '<' -> depth++
+                '>' -> if (depth > 0) depth--
+                else -> if (depth == 0 && !ch.isWhitespace()) simplified.append(ch)
+            }
+        }
+        return simplified.toString().ifEmpty { canonicalText }
+    }
 
     private fun findSpringBeanName(containingClass: com.intellij.psi.PsiClass): String? {
         for (annotation in containingClass.annotations) {
@@ -87,9 +101,21 @@ object MethodMetadataExtractor {
                 if (beanName != null) return beanName
             }
 
-            val simpleName = containingClass.name ?: continue
-            return BeanNameResolver.decapitalize(simpleName)
+            return BeanNameResolver.springDefaultBeanName(nestedSimpleNames(containingClass))
         }
         return null
+    }
+
+    /** 从外层到内层的简单类名，用于生成 Spring 默认 Bean 名（Outer.Inner → outer.Inner）。 */
+    private fun nestedSimpleNames(psiClass: com.intellij.psi.PsiClass): List<String> {
+        val names = ArrayList<String>()
+        var current: com.intellij.psi.PsiClass? = psiClass
+        while (current != null) {
+            val name = current.name ?: return emptyList()
+            names.add(name)
+            current = current.containingClass
+        }
+        names.reverse()
+        return names
     }
 }
