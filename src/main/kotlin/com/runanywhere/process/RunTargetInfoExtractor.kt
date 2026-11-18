@@ -1,5 +1,6 @@
 package com.runanywhere.process
 
+import com.intellij.execution.RunManager
 import com.intellij.execution.application.ApplicationConfiguration
 import com.intellij.execution.configurations.ModuleBasedConfiguration
 import com.intellij.execution.configurations.RunConfiguration
@@ -13,45 +14,30 @@ import com.intellij.openapi.util.Key
  * 从运行中的 [RunContentDescriptor] 提取模块、主类等信息，用于进程自动匹配。
  *
  * 进程启动时把 [ExecutionEnvironment] 写到我们自己的 [Key] 上。
- * 平台内部的同名 Key 是另一个实例，事后按名字新建读不到。
+ * IDE 重启后该 Key 会丢失，此时按 [RunContentDescriptor.runConfigurationName]
+ * 反查 [RunManager] 中的同名配置。
  */
 object RunTargetInfoExtractor {
 
     private val TARGET_INFO_KEY: Key<RunTargetInfo> = Key.create("run-anywhere.runTargetInfo")
 
-    @Suppress("UNCHECKED_CAST")
-    private val platformEnvironmentKey: Key<ExecutionEnvironment>? by lazy {
-        try {
-            val clazz = Class.forName("com.intellij.execution.impl.ExecutionManagerImpl")
-            val field = clazz.declaredFields.firstOrNull { candidate ->
-                java.lang.reflect.Modifier.isStatic(candidate.modifiers) &&
-                    candidate.name.contains("ENVIRONMENT")
-            } ?: return@lazy null
-            field.isAccessible = true
-            field.get(null) as? Key<ExecutionEnvironment>
-        } catch (_: Throwable) {
-            null
-        }
-    }
-
     fun remember(handler: ProcessHandler, env: ExecutionEnvironment) {
         handler.putUserData(TARGET_INFO_KEY, fromEnvironment(env))
     }
 
-    fun extract(@Suppress("UNUSED_PARAMETER") project: Project, descriptor: RunContentDescriptor): RunTargetInfo {
+    fun extract(project: Project, descriptor: RunContentDescriptor): RunTargetInfo {
         val handler = descriptor.processHandler
         val cached = handler?.getUserData(TARGET_INFO_KEY)
         if (cached != null) {
             return cached.withConfigurationName(descriptor.displayName)
         }
-        if (handler != null) {
-            val env = readPlatformEnvironment(handler)
-            if (env != null) {
-                val info = fromEnvironment(env).withConfigurationName(descriptor.displayName)
-                handler.putUserData(TARGET_INFO_KEY, info)
-                return info
-            }
+
+        val fromDescriptor = fromDescriptor(project, descriptor)
+        if (fromDescriptor != null) {
+            handler?.putUserData(TARGET_INFO_KEY, fromDescriptor)
+            return fromDescriptor
         }
+
         return RunTargetInfo(
             moduleName = null,
             mainClassName = null,
@@ -59,29 +45,33 @@ object RunTargetInfoExtractor {
         )
     }
 
-    internal fun fromEnvironment(env: ExecutionEnvironment): RunTargetInfo {
-        val config = env.runProfile as? RunConfiguration
+    /**
+     * 通过 Run Content 记录的执行配置名反查 [RunManager]（2026.1+ 提供该属性）。
+     */
+    private fun fromDescriptor(project: Project, descriptor: RunContentDescriptor): RunTargetInfo? {
+        val configurationName = descriptor.runConfigurationName?.takeIf { it.isNotBlank() } ?: return null
+        val settings = RunManager.getInstance(project)
+            .allSettings
+            .firstOrNull { it.name == configurationName }
+            ?: return null
+        return fromConfiguration(settings.configuration, configurationName)
+    }
+
+    internal fun fromEnvironment(env: ExecutionEnvironment): RunTargetInfo =
+        fromConfiguration(env.runProfile as? RunConfiguration, env.runProfile.name)
+
+    private fun fromConfiguration(config: RunConfiguration?, configurationName: String): RunTargetInfo {
         val moduleName = (config as? ModuleBasedConfiguration<*, *>)?.configurationModule?.module?.name
-        val mainClassName = extractMainClassName(config)
         return RunTargetInfo(
             moduleName = moduleName,
-            mainClassName = mainClassName,
-            configurationName = config?.name.orEmpty()
+            mainClassName = extractMainClassName(config),
+            configurationName = configurationName
         )
     }
 
     private fun RunTargetInfo.withConfigurationName(displayName: String?): RunTargetInfo {
         if (configurationName.isNotEmpty() || displayName.isNullOrEmpty()) return this
         return copy(configurationName = displayName)
-    }
-
-    private fun readPlatformEnvironment(handler: ProcessHandler): ExecutionEnvironment? {
-        val key = platformEnvironmentKey ?: return null
-        return try {
-            handler.getUserData(key)
-        } catch (_: Exception) {
-            null
-        }
     }
 
     /**

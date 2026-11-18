@@ -2,13 +2,13 @@
 
 在 IntelliJ IDEA 中，对**任意 Java 方法**右键一键调用，直接作用于**当前正在运行的 JVM**。
 
-插件内置 [Arthas](https://arthas.aliyun.com/) 4.0.5，通过动态 Attach + HTTP API 执行 OGNL / vmtool 命令，无需修改启动参数或 Run Configuration。
+插件内置 [Arthas](https://arthas.aliyun.com/) 4.3.5，通过动态 Attach + HTTP API 执行 OGNL / vmtool 命令，无需修改启动参数或 Run Configuration。
 
 | 项目 | 值 |
 |------|-----|
 | 插件 ID | `com.runanywhere` |
 | 版本 | 0.1.0 |
-| 兼容 IDE | IntelliJ IDEA **2026.1+**（`sinceBuild = 261`） |
+| 兼容 IDE | IntelliJ IDEA **2026.1 ～ 2026.3**（`sinceBuild = 261`，未设 `untilBuild`） |
 | 快捷键 | `Alt + Shift + A` |
 
 **典型场景**：本地快速触发 Service 方法、验证 Spring Bean 逻辑、在断点下调试时异步触发重试任务——无需写临时 Controller 或单元测试。
@@ -52,10 +52,10 @@
 
 | 项目 | 要求 |
 |------|------|
-| IDE | IntelliJ IDEA 2026.1+ |
+| IDE | IntelliJ IDEA 2026.1+（2026.3 已验证） |
 | 插件依赖 | Java 插件（内置） |
 | 可选依赖 | Spring 插件（增强 Bean 识别） |
-| 构建 JDK | Java 21 |
+| 构建 JDK | Java 25 |
 | 目标应用 | 由 IDEA 启动的本地 Java 进程，且允许 JVM Attach |
 
 ---
@@ -338,13 +338,13 @@ RunMethodAction（右键 / Alt+Shift+A）
 
 ### 前置条件
 
-- JDK 21
+- JDK 25
 - Gradle Wrapper（项目自带）
 
 ### 常用命令
 
 ```bash
-./gradlew downloadArthasBoot   # 下载 arthas-boot.jar（构建时自动执行）
+./gradlew downloadArthasBoot   # 下载 arthas-boot.jar（版本不匹配时重新下载，构建时自动执行）
 ./gradlew compileKotlin        # 编译
 ./gradlew test                 # 单元测试
 ./gradlew buildPlugin          # 构建可安装 ZIP
@@ -386,9 +386,9 @@ run-anywhere/
 | 组件 | 版本 |
 |------|------|
 | Kotlin | 2.3 |
-| IntelliJ Platform Gradle Plugin | 2.17 |
-| 目标 IDE | IntelliJ IDEA 2026.1 |
-| Arthas | 4.0.5 |
+| IntelliJ Platform Gradle Plugin | 2.20 |
+| 目标 IDE | IntelliJ IDEA 2026.3 |
+| Arthas | 4.3.5 |
 | Gson（插件内部） | 2.11 |
 
 ---
@@ -408,4 +408,4 @@ run-anywhere/
 
 本项目采用 [Apache License 2.0](LICENSE) 开源协议。
 
-内置的 [Arthas](https://arthas.aliyun.com/) 由阿里巴巴开源，遵循其自身许可证；构建时从 Maven Central 下载 `arthas-boot.jar`。
+内置的 [Arthas](https://arthas.aliyun.com/) 由阿里巴巴开源，遵循其自身许可证；构建时从 GitHub Releases 的 `arthas-bin.zip` 中提取 `arthas-boot.jar`。
