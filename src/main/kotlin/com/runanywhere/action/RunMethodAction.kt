@@ -1,5 +1,6 @@
 package com.runanywhere.action
 
+import com.intellij.codeInsight.hint.HintManager
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -8,7 +9,6 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiMethod
@@ -28,6 +28,7 @@ import com.runanywhere.settings.RunAnywhereSettings
 import com.runanywhere.ui.InstancePickDialog
 import com.runanywhere.ui.InvocationResult
 import com.runanywhere.ui.ParameterInputDialog
+import com.runanywhere.ui.RunAnywhereNotifications
 import com.runanywhere.ui.RunResultToolWindowFactory
 import com.runanywhere.ui.SecurityConfirmDialog
 
@@ -45,10 +46,9 @@ class RunMethodAction : AnAction() {
 
         val metadata = MethodMetadataExtractor.extract(method)
         if (metadata == null) {
-            Messages.showErrorDialog(
-                project,
-                "无法提取方法元数据。\n请确保该方法位于具有全限定名的类中。",
-                "Run Anywhere"
+            showHintOrNotification(
+                project, e,
+                "无法提取方法元数据。请确保该方法位于具有全限定名的类中。"
             )
             return
         }
@@ -88,6 +88,18 @@ class RunMethodAction : AnAction() {
         return PsiTreeUtil.getParentOfType(elementAt, PsiMethod::class.java)
     }
 
+    /**
+     * 在编辑器内优先用错误提示（不弹对话框），否则退化为气球通知。
+     */
+    private fun showHintOrNotification(project: Project, e: AnActionEvent, message: String) {
+        val editor = e.getData(CommonDataKeys.EDITOR)
+        if (editor != null && ApplicationManager.getApplication().isDispatchThread) {
+            HintManager.getInstance().showErrorHint(editor, message)
+            return
+        }
+        RunAnywhereNotifications.error(project, "方法不可用", message)
+    }
+
     private fun invokeViaArthas(
         project: Project,
         metadata: MethodMetadata,
@@ -115,8 +127,9 @@ class RunMethodAction : AnAction() {
             if (!arthasManager.isAttached(pid)) {
                 val attached = arthasManager.attach(pid)
                 if (!attached) {
-                    showError(
+                    RunAnywhereNotifications.error(
                         project,
+                        "Attach 失败",
                         "Arthas attach 到 PID $pid ($processName) 失败。\n" +
                             "可能原因：\n" +
                             "1. 目标 JVM 不允许 attach\n" +
@@ -154,16 +167,20 @@ class RunMethodAction : AnAction() {
             } else {
                 response
             }
-            val stillSubmitted = ArthasResponseParser.isAsyncSubmitted(finalResponse) &&
+            // 异步失败或执行结果非成功时，通过气球通知告知用户（避免仅靠 Tab 状态判断）
+            val isStillAsync = ArthasResponseParser.isAsyncSubmitted(finalResponse) &&
                 !ArthasResponseParser.hasExecutionOutput(finalResponse)
-
+            if (!isStillAsync && !finalResponse.isSuccess) {
+                RunAnywhereNotifications.error(project, "方法调用失败",
+                    "PID $pid ${metadata.methodName}() 返回失败。\n请查看工具窗口了解详情。")
+            }
             RunResultToolWindowFactory.updateResult(
                 project, runningContent,
                 InvocationResult(
                     tabTitle,
                     command,
                     finalResponse,
-                    asyncMode = asyncExecution && stillSubmitted
+                    asyncMode = asyncExecution && isStillAsync
                 )
             )
         }
@@ -225,12 +242,6 @@ class RunMethodAction : AnAction() {
             )
         }
         return selected
-    }
-
-    private fun showError(project: Project, message: String) {
-        ApplicationManager.getApplication().invokeLater {
-            Messages.showErrorDialog(project, message, "Run Anywhere")
-        }
     }
 
     override fun update(e: AnActionEvent) {

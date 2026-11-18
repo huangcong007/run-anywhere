@@ -1,12 +1,12 @@
 package com.runanywhere.process
 
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.psi.PsiMethod
 import com.intellij.ui.ColoredListCellRenderer
 import com.intellij.ui.SimpleTextAttributes
 import com.runanywhere.psi.MethodMetadata
+import com.runanywhere.ui.RunAnywhereNotifications
 import javax.swing.JList
 import javax.swing.ListSelectionModel
 
@@ -28,11 +28,10 @@ object ProcessSelectionPopup {
     ): Boolean {
         return when {
             processes.isEmpty() -> {
-                Messages.showErrorDialog(
+                RunAnywhereNotifications.warning(
                     project,
-                    "未检测到运行中的 Java 进程。\n" +
-                        "请先运行你的应用程序，然后再调用方法。",
-                    "Run Anywhere"
+                    "没有可调用的进程",
+                    "未检测到运行中的 Java 进程。请先运行你的应用程序，然后再调用方法。"
                 )
                 false
             }

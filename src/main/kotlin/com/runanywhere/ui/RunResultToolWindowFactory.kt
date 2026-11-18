@@ -5,12 +5,12 @@ import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
-import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.content.Content
 import com.intellij.ui.content.ContentFactory
 import com.intellij.util.ui.JBUI
+import com.intellij.util.ui.UIUtil
 import com.runanywhere.arthas.ArthasResponse
 import com.runanywhere.arthas.ArthasResponseParser
 import java.awt.BorderLayout
@@ -147,7 +147,7 @@ private class ResultPanel private constructor() : JPanel(BorderLayout()) {
             appendLine()
             appendLine("【正在等待 Arthas 响应，可同时运行其他方法】")
         }
-        textArea.foreground = JBColor(0x0000CC, 0xCCCCFF)
+        textArea.foreground = UIUtil.getLabelForeground()
     }
 
     private fun renderResult(result: InvocationResult) {
@@ -171,7 +171,7 @@ private class ResultPanel private constructor() : JPanel(BorderLayout()) {
             appendLine("【解析结果】")
             appendLine(ArthasResponseParser.parse(result.response, result.asyncMode))
         }
-        textArea.foreground = if (result.isSuccess) JBColor.BLACK else JBColor.RED
+        textArea.foreground = if (result.isSuccess) UIUtil.getLabelForeground() else UIUtil.getErrorForeground()
     }
 
     private fun formatStatus(result: InvocationResult): String {

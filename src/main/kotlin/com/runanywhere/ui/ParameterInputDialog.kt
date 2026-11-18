@@ -2,10 +2,10 @@ package com.runanywhere.ui
 
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
-import com.intellij.openapi.ui.Messages
-import com.intellij.ui.JBColor
+import com.intellij.openapi.ui.ValidationInfo
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
+import com.intellij.util.ui.UIUtil
 import com.runanywhere.psi.MethodMetadata
 import com.runanywhere.psi.ParamTypeKind
 import java.awt.Dimension
@@ -65,7 +65,7 @@ class ParameterInputDialog(
             val typeLabel = JLabel(formatTypeLabel(param)).apply {
                 if (!OgnlLiteralConverter.isSupportedInputType(param)) {
                     toolTipText = "不支持的类型，将传 null"
-                    foreground = JBColor.GRAY
+                    foreground = UIUtil.getLabelDisabledForeground()
                 } else if (JsonInputValidator.requiresJsonInput(param.kind)) {
                     toolTipText = "通过 JSON 输入；反序列化库可在 Settings → Other Settings → Run Anywhere 配置"
                 }
@@ -141,26 +141,38 @@ class ParameterInputDialog(
         else -> ""
     }
 
-    override fun doOKAction() {
+    /**
+     * 逐项校验输入；返回 [ValidationInfo] 后由平台就地提示并阻止关闭，
+     * 不使用模态消息框（平台规范：Validation Errors / Informing Users）。
+     */
+    private fun validateInputs(): ValidationInfo? {
         for (i in parameters.indices) {
             val param = parameters[i]
             if (nullCheckBoxes[i].isSelected) continue
             val raw = readInputText(inputFields[i])
-            if (JsonInputValidator.requiresJsonInput(param.kind) && raw.isNotBlank()) {
-                if (!JsonInputValidator.isValidJson(raw, param.kind)) {
-                    Messages.showErrorDialog(
-                        contentPanel,
-                        JsonInputValidator.validationErrorMessage(param.name, param.kind),
-                        "JSON 格式错误"
-                    )
-                    return
-                }
+            if (JsonInputValidator.requiresJsonInput(param.kind) && raw.isNotBlank() &&
+                !JsonInputValidator.isValidJson(raw, param.kind)
+            ) {
+                return ValidationInfo(
+                    JsonInputValidator.validationErrorMessage(param.name, param.kind),
+                    inputFields[i]
+                )
             }
             val literalError = OgnlLiteralConverter.validate(raw, param)
             if (literalError != null) {
-                Messages.showErrorDialog(contentPanel, literalError, "参数格式错误")
-                return
+                return ValidationInfo(literalError, inputFields[i])
             }
+        }
+        return null
+    }
+
+    override fun doValidate(): ValidationInfo? = validateInputs()
+
+    override fun doOKAction() {
+        val error = validateInputs()
+        if (error != null) {
+            setErrorText(error.message, error.component)
+            return
         }
 
         ognlArgs = parameters.indices.map { i ->

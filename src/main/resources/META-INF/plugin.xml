@@ -27,6 +27,9 @@
     <depends optional="true" config-file="withSpring.xml">com.intellij.spring</depends>
 
     <extensions defaultExtensionNs="com.intellij">
+        <!-- 气泡通知组：用于执行失败、无可用进程等非模态反馈 -->
+        <notificationGroup id="Run Anywhere" displayType="BALLOON" isLogByDefault="true"/>
+
         <!-- 工具窗口 -->
         <toolWindow
             id="Run Anywhere"
