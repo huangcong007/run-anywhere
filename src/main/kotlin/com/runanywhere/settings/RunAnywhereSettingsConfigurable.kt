@@ -36,6 +36,12 @@ class RunAnywhereSettingsConfigurable : Configurable {
         component = null
     }
 
-    /** P2 C3：设置页提供 Help topic，方便用户查看文档。 */
-    override fun getHelpTopic(): String? = "run-anywhere-settings"
+    /**
+     * F2：不返回 help topic。
+     *
+     * 平台会把 topic 拼成 `https://www.jetbrains.com/help/idea/<topic>.html`，
+     * 而本插件没有对应的官方帮助页，返回 topic 只会让 Help 按钮跳到 404。
+     * 文档入口改在面板内的「查看使用说明」链接（指向项目 Wiki），返回 null 即隐藏平台 Help 按钮。
+     */
+    override fun getHelpTopic(): String? = null
 }

@@ -6,10 +6,11 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.editor.Editor
-import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProcessCanceledException
+import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
@@ -17,7 +18,6 @@ import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiMethod
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.ui.content.Content
-import com.runanywhere.arthas.ArthasManager
 import com.runanywhere.arthas.ArthasResponse
 import com.runanywhere.arthas.ArthasResponseParser
 import com.runanywhere.arthas.OgnlExpressionBuilder
@@ -68,20 +68,34 @@ class RunMethodAction : AnAction() {
         }
         val execTimeoutMs = RunAnywhereSettings.getExecTimeoutMs()
         val asyncExecution = RunAnywhereSettings.isAsyncExecution()
-        val expandLevel = RunAnywhereSettings.getResultExpandLevel()
 
         val processes = RunningProcessDetector.getRunningProcesses(project)
         ProcessSelectionPopup.selectFromProcesses(
             project, processes, method, metadata
-        ) { process ->
+        ) { process: RunningProcess ->
             invokeViaArthas(
-                project, metadata, ognlArgs, execTimeoutMs, asyncExecution, expandLevel,
-                process.pid, process.displayName, process
+                project, metadata, ognlArgs, execTimeoutMs, asyncExecution,
+                process.pid, process.displayName
             )
         }
     }
 
+    /**
+     * F11：动作更新跑在后台线程（[ActionUpdateThread.BGT]），PSI 访问必须持读锁，
+     * 否则平台会抛 read-access 断言，导致菜单项异常消失。
+     *
+     * EDT 上本身具备读权限，直接取值；后台线程走非阻塞读操作的同步执行，
+     * 避免 `ReadAction.compute`（2026.3 已废弃）与非阻塞读操作各自的线程约束冲突。
+     */
     private fun findPsiMethod(e: AnActionEvent): PsiMethod? {
+        return if (ApplicationManager.getApplication().isDispatchThread) {
+            extractMethod(e)
+        } else {
+            ReadAction.nonBlocking<PsiMethod?> { extractMethod(e) }.executeSynchronously()
+        }
+    }
+
+    private fun extractMethod(e: AnActionEvent): PsiMethod? {
         val psiElement = e.getData(CommonDataKeys.PSI_ELEMENT)
         if (psiElement is PsiMethod) return psiElement
 
@@ -104,16 +118,20 @@ class RunMethodAction : AnAction() {
         RunAnywhereNotifications.error(project, I18n.NOTIFY_METHOD_UNAVAILABLE_TITLE(), message)
     }
 
+    /** 第一阶段产物：可直接用某个实例下标执行，或需要用户先选实例。 */
+    private sealed interface PrepareOutcome {
+        data class Ready(val instanceIndex: Int) : PrepareOutcome
+        data class NeedPick(val labels: List<String>) : PrepareOutcome
+    }
+
     private fun invokeViaArthas(
         project: Project,
         metadata: MethodMetadata,
         ognlArgs: List<String>,
         execTimeoutMs: Long,
         asyncExecution: Boolean,
-        expandLevel: Int,
         pid: Long,
         processName: String,
-        runningProcess: RunningProcess,
     ) {
         // P1 C9：标题带上运行配置名，自动匹配进程时也能一眼看出"打到了谁"
         val tabTitle = RunResultToolWindowFactory.uniqueTabTitle(
@@ -123,76 +141,98 @@ class RunMethodAction : AnAction() {
         val preliminary = if (needsInstancePick) {
             I18n.PROGRESS_QUERY_INSTANCES(metadata.className)
         } else {
-            OgnlExpressionBuilder.buildCommand(metadata, ognlArgs, expandLevel = expandLevel)
+            OgnlExpressionBuilder.buildCommand(metadata, ognlArgs)
         }
-        val runningContent = RunResultToolWindowFactory.showRunning(project, tabTitle, preliminary)
-            ?: return
 
-        // P1 B6+B7：真实进度 + 可取消。
-        // Task.Backgroundable 会在状态栏提供进度条与“取消”按钮，run() 跑在后台线程上，
-        // 不再出现“提交任务后 indicator 立刻消失”的问题。
+        // F3：拿不到工具窗口时不再静默返回。先告知用户，再走"无 content"路径，
+        // 让 updateResult 在结束阶段自行创建 Tab，结果不会丢。
+        val runningContent = RunResultToolWindowFactory.showRunning(project, tabTitle, preliminary)
+        if (runningContent == null) {
+            RunAnywhereNotifications.error(
+                project,
+                I18n.EXEC_FAIL_TITLE(),
+                I18n.TOOLWINDOW_UNAVAILABLE()
+            )
+        }
+
+        // 第一阶段：attach + 实例查询。进度与取消只覆盖这一段。
+        var outcome: PrepareOutcome? = null
         object : Task.Backgroundable(project, I18n.PROGRESS_TITLE(metadata.methodName), true) {
             override fun run(indicator: ProgressIndicator) {
-                try {
-                    doExecuteMethod(
-                        indicator, project, metadata, ognlArgs, execTimeoutMs,
-                        asyncExecution, expandLevel, pid, processName, runningContent,
-                        tabTitle, preliminary
-                    )
-                } catch (e: ProcessCanceledException) {
-                    RunResultToolWindowFactory.updateResult(
-                        project, runningContent,
-                        InvocationResult(
-                            tabTitle, preliminary,
-                            ArthasResponse(-1, "", false, I18n.EXEC_CANCELLED())
-                        )
-                    )
+                outcome = doPrepare(
+                    indicator, project, metadata, pid, processName,
+                    execTimeoutMs, runningContent, tabTitle, preliminary, needsInstancePick
+                )
+            }
+
+            override fun onSuccess() {
+                val prepared = outcome ?: return
+                if (project.isDisposed) return
+                // F12：实例选择放在两个后台任务之间，在 EDT 上正常弹窗，
+                // 不会出现"模态框盖住进度条"或"后台线程弹模态框"的语义问题。
+                val index = when (prepared) {
+                    is PrepareOutcome.Ready -> prepared.instanceIndex
+                    is PrepareOutcome.NeedPick -> {
+                        val picked = InstancePickDialog(project, metadata.className, prepared.labels)
+                            .showAndGetIndex()
+                        if (picked == null) {
+                            writeFailure(
+                                project, runningContent, tabTitle, preliminary,
+                                I18n.INSTANCE_PICK_CANCELLED()
+                            )
+                            return
+                        }
+                        picked
+                    }
                 }
+                startExecute(
+                    project, metadata, ognlArgs, execTimeoutMs, asyncExecution,
+                    pid, index, runningContent, tabTitle
+                )
             }
         }.queue()
     }
 
-    private fun doExecuteMethod(
+    /**
+     * 连接目标进程并按需确定实例下标。
+     *
+     * @return 可继续执行的结果；失败或取消时已把结果写回 Tab 并返回 null。
+     */
+    private fun doPrepare(
         indicator: ProgressIndicator,
         project: Project,
         metadata: MethodMetadata,
-        ognlArgs: List<String>,
-        execTimeoutMs: Long,
-        asyncExecution: Boolean,
-        expandLevel: Int,
         pid: Long,
         processName: String,
+        execTimeoutMs: Long,
         runningContent: Content?,
         tabTitle: String,
         preliminary: String,
-    ) {
-        if (project.isDisposed) return
+        needsInstancePick: Boolean,
+    ): PrepareOutcome? {
+        if (project.isDisposed) return null
         if (indicator.isCanceled) {
-            RunResultToolWindowFactory.updateResult(
-                project, runningContent,
-                InvocationResult(tabTitle, preliminary, ArthasResponse(-1, "", false, I18n.EXEC_CANCELLED()))
-            )
-            return
+            writeFailure(project, runningContent, tabTitle, preliminary, I18n.EXEC_CANCELLED())
+            return null
         }
+
         indicator.text = I18n.PROGRESS_ATTACH()
+        indicator.fraction = 0.05
         val arthasManager = ArthasSessionService.getInstance(project).arthasManager
-        LOG.info("RunMethod: executing in thread ${Thread.currentThread().name}")
+        LOG.info("RunMethod: preparing in thread ${Thread.currentThread().name}")
 
         if (!arthasManager.isAttached(pid)) {
             val attached = arthasManager.attach(
                 pid,
                 onProgress = { fraction ->
-                    if (!indicator.isCanceled) indicator.fraction = 0.3 * fraction
+                    if (!indicator.isCanceled) indicator.fraction = 0.05 + 0.35 * fraction
                 },
                 isCanceled = { indicator.isCanceled },
             )
             if (!attached) {
                 if (indicator.isCanceled) {
-                    RunResultToolWindowFactory.updateResult(
-                        project, runningContent,
-                        InvocationResult(tabTitle, preliminary, ArthasResponse(-1, "", false, I18n.EXEC_CANCELLED()))
-                    )
-                    return
+                    writeFailure(project, runningContent, tabTitle, preliminary, I18n.EXEC_CANCELLED())
+                    return null
                 }
                 // P1 D1：通知只说人话（发生了什么），可能原因与日志位置放进结果详情
                 RunAnywhereNotifications.error(
@@ -200,50 +240,110 @@ class RunMethodAction : AnAction() {
                     I18n.EXEC_ATTACH_FAIL_TITLE(),
                     I18n.EXEC_ATTACH_FAIL_NOTIFY(pid, processName)
                 )
-                RunResultToolWindowFactory.updateResult(
-                    project, runningContent,
-                    InvocationResult(
-                        tabTitle, preliminary,
-                        ArthasResponse(-1, "", false, I18n.EXEC_ATTACH_FAIL_BODY(pid, processName))
-                    )
+                writeFailure(
+                    project, runningContent, tabTitle, preliminary,
+                    I18n.EXEC_ATTACH_FAIL_BODY(pid, processName)
                 )
-                return
+                return null
             }
         }
-        indicator.text = I18n.PROGRESS_EXECUTE(metadata.methodName)
-        indicator.fraction = 0.5
 
-        val needsInstancePick = !metadata.isStatic && metadata.springBeanName == null && !metadata.isConstructor
-        val instanceIndex = if (!needsInstancePick) {
-            0
-        } else {
-            if (indicator.isCanceled) {
-                RunResultToolWindowFactory.updateResult(
-                    project, runningContent,
-                    InvocationResult(tabTitle, OgnlExpressionBuilder.buildCommand(metadata, ognlArgs, 0, expandLevel),
-                        ArthasResponse(-1, "", false, I18n.EXEC_CANCELLED()))
-                )
-                return
-            }
-            resolveInstanceIndex(project, arthasManager, metadata, pid, execTimeoutMs, tabTitle, runningContent, indicator)
-                ?: return
-        }
+        if (!needsInstancePick) return PrepareOutcome.Ready(0)
+
+        indicator.text = I18n.PROGRESS_QUERY_INSTANCES(metadata.className)
+        indicator.fraction = 0.5
+        val countCommand = OgnlExpressionBuilder.buildInstanceCountCommand(metadata.className)
+        val countResponse = arthasManager.exec(pid, countCommand, execTimeoutMs, async = false)
         if (indicator.isCanceled) {
+            writeFailure(project, runningContent, tabTitle, countCommand, I18n.EXEC_CANCELLED())
+            return null
+        }
+        val count = ArthasResponseParser.parseIntValue(countResponse)
+        if (count == null) {
             RunResultToolWindowFactory.updateResult(
-                project, runningContent,
-                InvocationResult(tabTitle, OgnlExpressionBuilder.buildCommand(metadata, ognlArgs, instanceIndex, expandLevel),
-                    ArthasResponse(-1, "", false, I18n.EXEC_CANCELLED()))
+                project, runningContent, InvocationResult(tabTitle, countCommand, countResponse)
             )
+            return null
+        }
+        if (count <= 0) {
+            writeFailure(
+                project, runningContent, tabTitle, countCommand,
+                I18n.INSTANCE_PICK_NONE(metadata.className)
+            )
+            return null
+        }
+        if (count == 1) return PrepareOutcome.Ready(0)
+
+        val labelCommand = OgnlExpressionBuilder.buildInstanceLabelCommand(metadata.className)
+        val labelResponse = arthasManager.exec(pid, labelCommand, execTimeoutMs, async = false)
+        if (indicator.isCanceled) {
+            writeFailure(project, runningContent, tabTitle, countCommand, I18n.EXEC_CANCELLED())
+            return null
+        }
+        val labels = ArthasResponseParser.parseStringItems(labelResponse)
+        val display = if (labels.size == count) labels else (0 until count).map { "instances[$it]" }
+        return PrepareOutcome.NeedPick(display)
+    }
+
+    /** 第二阶段：构造命令并执行。 */
+    private fun startExecute(
+        project: Project,
+        metadata: MethodMetadata,
+        ognlArgs: List<String>,
+        execTimeoutMs: Long,
+        asyncExecution: Boolean,
+        pid: Long,
+        instanceIndex: Int,
+        runningContent: Content?,
+        tabTitle: String,
+    ) {
+        object : Task.Backgroundable(project, I18n.PROGRESS_TITLE(metadata.methodName), true) {
+            override fun run(indicator: ProgressIndicator) {
+                try {
+                    doExecute(
+                        indicator, project, metadata, ognlArgs, execTimeoutMs,
+                        asyncExecution, pid, instanceIndex, runningContent, tabTitle
+                    )
+                } catch (e: ProcessCanceledException) {
+                    writeFailure(
+                        project, runningContent, tabTitle,
+                        OgnlExpressionBuilder.buildCommand(metadata, ognlArgs, instanceIndex),
+                        I18n.EXEC_CANCELLED()
+                    )
+                }
+            }
+        }.queue()
+    }
+
+    private fun doExecute(
+        indicator: ProgressIndicator,
+        project: Project,
+        metadata: MethodMetadata,
+        ognlArgs: List<String>,
+        execTimeoutMs: Long,
+        asyncExecution: Boolean,
+        pid: Long,
+        instanceIndex: Int,
+        runningContent: Content?,
+        tabTitle: String,
+    ) {
+        if (project.isDisposed) return
+        val command = OgnlExpressionBuilder.buildCommand(metadata, ognlArgs, instanceIndex)
+        if (indicator.isCanceled) {
+            writeFailure(project, runningContent, tabTitle, command, I18n.EXEC_CANCELLED())
             return
         }
-        val command = OgnlExpressionBuilder.buildCommand(
-            metadata, ognlArgs, instanceIndex, expandLevel
-        )
+
+        indicator.text = I18n.PROGRESS_EXECUTE(metadata.methodName)
+        indicator.fraction = 0.2
         LOG.info("RunMethod: executing command: $command (async=$asyncExecution, timeout=${execTimeoutMs}ms)")
+
+        val arthasManager = ArthasSessionService.getInstance(project).arthasManager
         val response = arthasManager.exec(pid, command, execTimeoutMs, asyncExecution)
         LOG.info("RunMethod: response success=${response.isSuccess}, status=${response.statusCode}")
-        indicator.fraction = 0.8
+        indicator.fraction = 0.7
         indicator.text = I18n.PROGRESS_WAIT_RESULT()
+
         val finalResponse = if (asyncExecution && ArthasResponseParser.isAsyncSubmitted(response)) {
             RunResultToolWindowFactory.updateResult(
                 project, runningContent,
@@ -255,13 +355,9 @@ class RunMethodAction : AnAction() {
         } else {
             response
         }
+
         if (indicator.isCanceled) {
-            RunResultToolWindowFactory.updateResult(
-                project, runningContent,
-                InvocationResult(tabTitle, command,
-                    ArthasResponse(-1, "", false, I18n.EXEC_CANCELLED()),
-                    asyncMode = asyncExecution)
-            )
+            writeFailure(project, runningContent, tabTitle, command, I18n.EXEC_CANCELLED(), asyncMode = asyncExecution)
             return
         }
         val isStillAsync = ArthasResponseParser.isAsyncSubmitted(finalResponse) &&
@@ -277,73 +373,23 @@ class RunMethodAction : AnAction() {
         indicator.text = I18n.PROGRESS_DONE()
         RunResultToolWindowFactory.updateResult(
             project, runningContent,
-            InvocationResult(
-                tabTitle,
-                command,
-                finalResponse,
-                asyncMode = asyncExecution && isStillAsync
-            )
+            InvocationResult(tabTitle, command, finalResponse, asyncMode = asyncExecution && isStillAsync)
         )
     }
 
-    /**
-     * @return 选中的 instances 下标；查询失败或用户取消时返回 null，并写回当前 Tab
-     */
-    private fun resolveInstanceIndex(
+    /** 统一的失败/取消落盘：写回 Tab，避免用户只看到"执行中"停住。 */
+    private fun writeFailure(
         project: Project,
-        arthasManager: ArthasManager,
-        metadata: MethodMetadata,
-        pid: Long,
-        execTimeoutMs: Long,
+        content: Content?,
         tabTitle: String,
-        runningContent: Content?,
-        indicator: ProgressIndicator,
-    ): Int? {
-        val countCommand = OgnlExpressionBuilder.buildInstanceCountCommand(metadata.className)
-        val countResponse = arthasManager.exec(pid, countCommand, execTimeoutMs, async = false)
-        if (indicator.isCanceled) return null
-        val count = ArthasResponseParser.parseIntValue(countResponse)
-        if (count == null) {
-            RunResultToolWindowFactory.updateResult(
-                project, runningContent,
-                InvocationResult(tabTitle, countCommand, countResponse)
-            )
-            return null
-        }
-        if (count <= 0) {
-            RunResultToolWindowFactory.updateResult(
-                project, runningContent,
-                InvocationResult(
-                    tabTitle,
-                    countCommand,
-                    ArthasResponse(-1, "", false, I18n.INSTANCE_PICK_NONE(metadata.className))
-                )
-            )
-            return null
-        }
-        if (count == 1) return 0
-        if (project.isDisposed) return null
-        val labelCommand = OgnlExpressionBuilder.buildInstanceLabelCommand(metadata.className)
-        val labelResponse = arthasManager.exec(pid, labelCommand, execTimeoutMs, async = false)
-        val labels = ArthasResponseParser.parseStringItems(labelResponse)
-        val display = if (labels.size == count) labels else (0 until count).map { "instances[$it]" }
-        var selected: Int? = null
-        ApplicationManager.getApplication().invokeAndWait {
-            if (!project.isDisposed) {
-                selected = InstancePickDialog(project, metadata.className, display).showAndGetIndex()
-            }
-        }
-        if (selected == null) {
-            RunResultToolWindowFactory.updateResult(
-                project, runningContent,
-                InvocationResult(
-                    tabTitle,
-                    countCommand,
-                    ArthasResponse(-1, "", false, I18n.INSTANCE_PICK_CANCELLED())
-                )
-            )
-        }
-        return selected
+        command: String,
+        message: String,
+        asyncMode: Boolean = false,
+    ) {
+        RunResultToolWindowFactory.updateResult(
+            project, content,
+            InvocationResult(tabTitle, command, ArthasResponse(-1, "", false, message), asyncMode = asyncMode)
+        )
     }
 
     override fun update(e: AnActionEvent) {

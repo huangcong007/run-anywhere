@@ -55,6 +55,9 @@ intellijPlatform {
 
         ideaVersion {
             sinceBuild = "261"
+            // 仅在已验证的 2026.x 上声明兼容；新大版本发布后需重新验证再放开，
+            // 避免 Marketplace 把未验证版本也算作"兼容"。
+            untilBuild = "263.*"
         }
     }
 }

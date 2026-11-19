@@ -37,13 +37,9 @@ object ProcessSelectionPopup {
                 false
             }
             processes.size == 1 -> {
-                val first = processes.first()
-                onSelected(first)
-                RunAnywhereNotifications.info(
-                    project,
-                    I18n.SELECT_PROCESS_INFO_TITLE(),
-                    I18n.SELECT_PROCESS_INFO_BODY(first.pid, first.displayName)
-                )
+                // F13：只有一个进程时用户没有选择余地，不再发"已选择进程"通知（纯噪音）。
+                // 目标进程在结果 Tab 标题里可见，已足以回答"打到了谁"。
+                onSelected(processes.first())
                 true
             }
             else -> {

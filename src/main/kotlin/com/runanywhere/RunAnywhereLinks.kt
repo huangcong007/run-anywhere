@@ -3,9 +3,17 @@ package com.runanywhere
 /**
  * 插件对外链接。
  *
- * 注意：D4 待补真实分发信息，这里的地址与 `META-INF/plugin.xml` 的 vendor url 占位一致，
- * 拿到正式仓库 / 文档地址后只需改这一处。
+ * 文档指向仓库 Wiki 的首页：正文完整，且与代码版本同步维护。
+ * 仓库根 README 曾长期停留在 0.1.0（Arthas 4.0.5 / JDK 21），故不作为文档入口。
  */
 object RunAnywhereLinks {
-    const val DOCS_URL: String = "https://github.com/run-anywhere#readme"
+
+    /** 项目主页。 */
+    const val REPO_URL: String = "https://github.com/huangcong007/run-anywhere"
+
+    /** 使用说明（Wiki 首页，内容最全）。 */
+    const val DOCS_URL: String = "$REPO_URL/wiki"
+
+    /** 问题反馈。 */
+    const val ISSUES_URL: String = "$REPO_URL/issues"
 }

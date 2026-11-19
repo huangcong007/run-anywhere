@@ -8,22 +8,22 @@ import com.runanywhere.ui.OgnlLiteralConverter
  */
 object OgnlExpressionBuilder {
 
-    private const val DEFAULT_EXPAND_LEVEL = 3
+    /**
+     * Arthas `-x` 展开层级，决定返回值的结构化程度。
+     *
+     * 解析结果按 JSON 展示，而 JSON 结构来自 Arthas 的对象展开，所以这里必须 > 0；
+     * 取 3 是 Arthas 常用深度（其取值上限为 4），再深的层级会被渲染成字符串。
+     * void 方法没有返回值，固定 0。
+     */
+    private const val EXPAND_LEVEL = 3
     private const val VOID_EXPAND_LEVEL = 0
-    const val MIN_EXPAND_LEVEL = 0
-    const val MAX_EXPAND_LEVEL = 10
 
     fun buildCommand(
         metadata: MethodMetadata,
         ognlArgs: List<String>,
         instanceIndex: Int = 0,
-        expandLevel: Int = DEFAULT_EXPAND_LEVEL
     ): String {
-        val level = if (metadata.isVoidReturn) {
-            VOID_EXPAND_LEVEL
-        } else {
-            expandLevel.coerceIn(MIN_EXPAND_LEVEL, MAX_EXPAND_LEVEL)
-        }
+        val level = if (metadata.isVoidReturn) VOID_EXPAND_LEVEL else EXPAND_LEVEL
         val invocation = invocationExpr(metadata, ognlArgs, instanceIndex)
         return when {
             metadata.isConstructor || metadata.isStatic ->

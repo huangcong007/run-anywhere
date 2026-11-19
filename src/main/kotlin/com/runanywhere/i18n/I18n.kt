@@ -60,6 +60,9 @@ object I18n {
         message("param.null.accessibleName", paramName)
     fun PARAM_EMPTY() = message("param.empty")
     fun PARAM_UNSUPPORTED_TYPE() = message("param.unsupported.type")
+    fun PARAM_UNSUPPORTED_INLINE() = message("param.unsupported.inline")
+    fun PARAM_INPUT_ACCESSIBLE_NAME(paramName: String, paramType: String) =
+        message("param.input.accessibleName", paramName, paramType)
     fun PARAM_JSON_HINT() = message("param.json.hint")
 
     // ── 实例选择 ─────────────────────────────────────────
@@ -81,17 +84,15 @@ object I18n {
     fun SETTINGS_TIMEOUT_LABEL() = message("settings.timeout.label")
     fun SETTINGS_TIMEOUT_HINT(min: Int, max: Int) =
         message("settings.timeout.hint", min, max)
-    fun SETTINGS_EXPAND_LABEL() = message("settings.expand.label")
-    fun SETTINGS_EXPAND_HINT(min: Int, max: Int) =
-        message("settings.expand.hint", min, max)
     fun SETTINGS_JSON_LIB_LABEL() = message("settings.jsonLib.label")
     fun SETTINGS_JSON_LIB_HINT() = message("settings.jsonLib.hint")
     fun SETTINGS_RESTORE_SECURITY() = message("settings.restoreSecurity")
     fun SETTINGS_RESTORE_SECURITY_TIP() = message("settings.restoreSecurity.tip")
+    fun SETTINGS_RESTORE_PENDING() = message("settings.restoreSecurity.pending")
+    fun SETTINGS_DOCS_LINK() = message("settings.docs")
+    fun SETTINGS_ERROR_NUMBER(label: String) = message("settings.error.number", label)
     fun SETTINGS_ERROR_TIMEOUT(min: Int, max: Int, current: Int) =
         message("settings.error.timeout", min, max, current)
-    fun SETTINGS_ERROR_EXPAND(min: Int, max: Int, current: Int) =
-        message("settings.error.expand", min, max, current)
 
     // ── 执行反馈 ─────────────────────────────────────────
     fun EXEC_ATTACH_FAIL_TITLE() = message("exec.attachFail.title")
@@ -103,6 +104,7 @@ object I18n {
     fun EXEC_FAIL_BODY(pid: Long, method: String) =
         message("exec.fail.body", pid, method)
     fun EXEC_CANCELLED() = message("exec.cancelled")
+    fun TOOLWINDOW_UNAVAILABLE() = message("exec.toolWindowUnavailable")
 
     // ── 结果 Tab ─────────────────────────────────────────
     fun TAB_RUNNING_START_AT(now: String) = message("tab.running.startAt", now)

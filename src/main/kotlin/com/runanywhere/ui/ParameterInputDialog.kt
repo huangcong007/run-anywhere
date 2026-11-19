@@ -77,6 +77,8 @@ class ParameterInputDialog(
             gbc.weightx = 1.0
             gbc.fill = GridBagConstraints.HORIZONTAL
             val input = createInputComponent(param)
+            // P1 C5 / F7：输入控件自身需要 accessible name，否则读屏只报"文本字段"
+            applyAccessibleName(input, param)
             inputFields.add(input)
             panel.add(input, gbc)
             gbc.weightx = 0.0
@@ -97,19 +99,24 @@ class ParameterInputDialog(
 
     private fun createInputComponent(param: MethodMetadata.ParamInfo): JComponent {
         val supported = OgnlLiteralConverter.isSupportedInputType(param)
+        // F6：不支持的类型不再"只挂 tooltip"。禁用态的输入框内常显说明，
+        // 让不悬停、不用鼠标的用户也能知道该参数会以 null 传入。
+        val unsupportedHint = I18n.PARAM_UNSUPPORTED_INLINE()
         return if (JsonInputValidator.requiresJsonInput(param.kind)) {
             JScrollPane(
                 JBTextArea(3, 24).apply {
                     lineWrap = true
                     wrapStyleWord = true
-                    emptyText.text = JsonInputValidator.expectedJsonHint(param.kind)
+                    emptyText.text = if (supported) JsonInputValidator.expectedJsonHint(param.kind) else unsupportedHint
                     isEnabled = supported
                 }
             ).apply {
                 preferredSize = Dimension(280, 72)
             }
         } else {
-            val placeholder = when {
+            val placeholder = if (!supported) {
+                unsupportedHint
+            } else when {
                 param.isEnum -> I18n.PARAM_PLACEHOLDER_ENUM()
                 param.type == "long" || param.type == "java.lang.Long" -> I18n.PARAM_PLACEHOLDER_LONG()
                 param.type.startsWith("java.time.") -> I18n.PARAM_PLACEHOLDER_TIME()
@@ -120,6 +127,24 @@ class ParameterInputDialog(
                 isEnabled = supported
             }
         }
+    }
+
+    /**
+     * 给输入控件设置 accessible name。
+     * 不支持的参数额外把"将传 null"写进名称，读屏用户同样能获得该信息。
+     */
+    private fun applyAccessibleName(input: JComponent, param: MethodMetadata.ParamInfo) {
+        val base = I18n.PARAM_INPUT_ACCESSIBLE_NAME(param.name, formatTypeLabel(param))
+        val name = if (OgnlLiteralConverter.isSupportedInputType(param)) {
+            base
+        } else {
+            "$base ${I18n.PARAM_UNSUPPORTED_INLINE()}"
+        }
+        val target: JComponent = when (input) {
+            is JScrollPane -> input.viewport.view as? JComponent ?: input
+            else -> input
+        }
+        target.accessibleContext.accessibleName = name
     }
 
     private fun formatTypeLabel(param: MethodMetadata.ParamInfo): String {

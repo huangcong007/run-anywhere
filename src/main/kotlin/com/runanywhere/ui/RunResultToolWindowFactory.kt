@@ -20,7 +20,6 @@ import com.runanywhere.RunAnywhereLinks
 import com.runanywhere.arthas.ArthasResponse
 import com.runanywhere.arthas.ArthasResponseParser
 import com.runanywhere.i18n.I18n
-import com.runanywhere.settings.RunAnywhereSettings
 import com.runanywhere.settings.RunAnywhereSettingsConfigurable
 import java.awt.BorderLayout
 import java.awt.FlowLayout
@@ -89,9 +88,7 @@ class RunResultToolWindowFactory : ToolWindowFactory {
         ): Content? {
             val toolWindow = project.getService(com.intellij.openapi.wm.ToolWindowManager::class.java)
                 ?.getToolWindow(TOOL_WINDOW_ID) ?: return null
-            // P1 A4：默认隐藏，首次执行时才注册到 stripe 并显示。
-            // 记住"见过"，后续项目打开不再隐藏。
-            RunAnywhereSettings.setToolWindowRevealed(true)
+            // 工具窗口常驻：空态即首次使用引导，不再做"用过才出现"的隐藏。
             toolWindow.setAvailable(true, null)
             toolWindow.show()
             val contentManager = toolWindow.contentManager
@@ -146,9 +143,12 @@ class RunResultToolWindowFactory : ToolWindowFactory {
 
         /**
          * 通过 [com.intellij.util.ui.accessibility.AccessibleAnnouncerUtil] 播报状态变化（P2 B10）。
+         *
+         * 第三个参数 assertive 传 false：结果到达属于"可稍后播报"的信息，
+         * 用 assertive 会打断屏幕阅读器正在朗读的内容。
          */
         private fun announceResult(panel: JPanel, message: String) {
-            com.intellij.util.ui.accessibility.AccessibleAnnouncerUtil.announce(panel, message, true)
+            com.intellij.util.ui.accessibility.AccessibleAnnouncerUtil.announce(panel, message, false)
         }
     }
 
@@ -261,18 +261,22 @@ private class ResultPanel private constructor() : JPanel(BorderLayout()) {
         border = JBUI.Borders.emptyBottom(8)
     }
 
-    /** 正文：解析结果常驻，原始命令 / 原始响应按需展开。 */
+    /**
+     * 正文：解析结果常驻（JSON 缩进文本），原始命令 / 原始响应按需展开。
+     *
+     * JSON 依靠缩进表达层级，所以关闭自动换行、改等宽字体、允许横向滚动；
+     * 换行会把缩进层级压平，长篇 JSON 反而更难读。
+     */
     private val contentArea = JTextArea().apply {
         isEditable = false
-        lineWrap = true
-        wrapStyleWord = true
-        font = UIUtil.getLabelFont()
+        lineWrap = false
+        font = JBUI.Fonts.create(Font.MONOSPACED, UIUtil.getLabelFont().size)
         background = UIUtil.getPanelBackground()
         border = JBUI.Borders.empty(6)
     }
     private val contentScroll = JScrollPane(contentArea).apply {
         verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
-        horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
+        horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED
         border = JBUI.Borders.customLine(JBColor.border(), 1)
     }
 

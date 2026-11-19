@@ -83,7 +83,7 @@ class OgnlExpressionBuilderTest {
     }
 
     @Test
-    fun `void return uses expand level 0`() {
+    fun `void return does not read the result`() {
         val metadata = com.runanywhere.psi.MethodMetadata(
             className = "com.example.UserService",
             methodName = "retryUploadByRecordId",
@@ -92,12 +92,13 @@ class OgnlExpressionBuilderTest {
             springBeanName = "materialService",
             isVoidReturn = true
         )
-        val command = OgnlExpressionBuilder.buildCommand(metadata, listOf("123L"), expandLevel = 5)
+        val command = OgnlExpressionBuilder.buildCommand(metadata, listOf("123L"))
         assertTrue(command.endsWith("-x 0"))
+        assertFalse(command.contains("#_raResult"))
     }
 
     @Test
-    fun `expand level comes from the caller`() {
+    fun `expand level keeps structure for json output`() {
         val metadata = com.runanywhere.psi.MethodMetadata(
             className = "com.example.Utils",
             methodName = "add",
@@ -105,8 +106,9 @@ class OgnlExpressionBuilderTest {
             isStatic = true,
             springBeanName = null
         )
-        val command = OgnlExpressionBuilder.buildCommand(metadata, listOf("1"), expandLevel = 5)
-        assertTrue(command.endsWith("-x 5"))
+        val command = OgnlExpressionBuilder.buildCommand(metadata, listOf("1"))
+        // 解析结果按 JSON 展示，必须让 Arthas 展开对象，否则只剩 toString 字符串
+        assertTrue(command.endsWith("-x 3"))
     }
 
     @Test
@@ -163,5 +165,35 @@ class OgnlExpressionBuilderTest {
         assertTrue(command.contains("identityHashCode(#this)"))
         val inner = command.substringAfter("--express '").substringBeforeLast("' -x")
         assertFalse(inner.contains("'"))
+    }
+
+    @Test
+    fun `result is not converted to string`() {
+        val metadata = com.runanywhere.psi.MethodMetadata(
+            className = "com.example.UserService",
+            methodName = "findById",
+            parameters = emptyList(),
+            isStatic = false,
+            springBeanName = null
+        )
+        val command = OgnlExpressionBuilder.buildCommand(metadata, listOf("1L"))
+        // 一旦转成 String，结构信息就在目标 JVM 里丢失，JSON 展示将无从谈起
+        assertFalse(command.contains("toString()"))
+        assertTrue(command.contains("instances[0].findById(1L)"))
+    }
+
+    @Test
+    fun `void method has no result expression`() {
+        val metadata = com.runanywhere.psi.MethodMetadata(
+            className = "com.example.UserService",
+            methodName = "clear",
+            parameters = emptyList(),
+            isStatic = false,
+            springBeanName = null,
+            isVoidReturn = true
+        )
+        val command = OgnlExpressionBuilder.buildCommand(metadata, emptyList())
+        assertFalse(command.contains("#_raResult"))
+        assertTrue(command.contains("instances[0].clear()"))
     }
 }
