@@ -115,8 +115,9 @@ class RunMethodAction : AnAction() {
         processName: String,
         runningProcess: RunningProcess,
     ) {
+        // P1 C9：标题带上运行配置名，自动匹配进程时也能一眼看出"打到了谁"
         val tabTitle = RunResultToolWindowFactory.uniqueTabTitle(
-            project, "PID $pid ${metadata.methodName}()"
+            project, "$processName · PID $pid ${metadata.methodName}()"
         )
         val needsInstancePick = !metadata.isStatic && metadata.springBeanName == null && !metadata.isConstructor
         val preliminary = if (needsInstancePick) {
@@ -193,14 +194,18 @@ class RunMethodAction : AnAction() {
                     )
                     return
                 }
+                // P1 D1：通知只说人话（发生了什么），可能原因与日志位置放进结果详情
                 RunAnywhereNotifications.error(
                     project,
                     I18n.EXEC_ATTACH_FAIL_TITLE(),
-                    I18n.EXEC_ATTACH_FAIL_BODY(pid, processName)
+                    I18n.EXEC_ATTACH_FAIL_NOTIFY(pid, processName)
                 )
                 RunResultToolWindowFactory.updateResult(
                     project, runningContent,
-                    InvocationResult(tabTitle, preliminary, ArthasResponse(-1, "", false, I18n.EXEC_ATTACH_FAILED_INLINE()))
+                    InvocationResult(
+                        tabTitle, preliminary,
+                        ArthasResponse(-1, "", false, I18n.EXEC_ATTACH_FAIL_BODY(pid, processName))
+                    )
                 )
                 return
             }

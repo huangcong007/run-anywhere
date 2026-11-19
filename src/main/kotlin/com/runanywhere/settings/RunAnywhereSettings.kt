@@ -13,6 +13,7 @@ object RunAnywhereSettings {
     private const val WARMUP_ATTACH_KEY = "run-anywhere.warmup-attach"
     private const val JSON_LIBRARY_KEY = "run-anywhere.json-library"
     private const val RESULT_EXPAND_LEVEL_KEY = "run-anywhere.result-expand-level"
+    private const val TOOL_WINDOW_REVEALED_KEY = "run-anywhere.toolwindow.revealed"
 
     const val DEFAULT_EXEC_TIMEOUT_SECONDS = 300
     const val MIN_EXEC_TIMEOUT_SECONDS = 30
@@ -70,6 +71,17 @@ object RunAnywhereSettings {
     fun getResultExpandLevel(): Int {
         val value = PropertiesComponent.getInstance().getInt(RESULT_EXPAND_LEVEL_KEY, DEFAULT_RESULT_EXPAND_LEVEL)
         return value.coerceIn(MIN_RESULT_EXPAND_LEVEL, MAX_RESULT_EXPAND_LEVEL)
+    }
+
+    /**
+     * 用户是否已经"见过"结果工具窗口。
+     * 没见过时项目打开不注册底部 stripe 按钮（P1 A4）；见过一次后保持常驻，尊重用户习惯。
+     */
+    fun isToolWindowRevealed(): Boolean =
+        PropertiesComponent.getInstance().getBoolean(TOOL_WINDOW_REVEALED_KEY, false)
+
+    fun setToolWindowRevealed(revealed: Boolean) {
+        PropertiesComponent.getInstance().setValue(TOOL_WINDOW_REVEALED_KEY, revealed, false)
     }
 
     fun setResultExpandLevel(level: Int) {

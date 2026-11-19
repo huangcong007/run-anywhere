@@ -97,6 +97,8 @@ object I18n {
     fun EXEC_ATTACH_FAIL_TITLE() = message("exec.attachFail.title")
     fun EXEC_ATTACH_FAIL_BODY(pid: Long, name: String) =
         message("exec.attachFail.body", pid, name, message("exec.attachFail.reasons"))
+    fun EXEC_ATTACH_FAIL_NOTIFY(pid: Long, name: String) =
+        message("exec.attachFail.notify", pid, name)
     fun EXEC_FAIL_TITLE() = message("exec.fail.title")
     fun EXEC_FAIL_BODY(pid: Long, method: String) =
         message("exec.fail.body", pid, method)
@@ -118,6 +120,9 @@ object I18n {
     fun TAB_ERROR_PREFIX() = message("tab.error.prefix")
     fun TAB_PARSED_HEADER() = message("tab.parsed.header")
     fun TAB_WELCOME_TEXT() = message("tab.welcome")
+    fun TAB_WELCOME_TITLE() = message("tab.welcome.title")
+    fun TAB_WELCOME_OPEN_SETTINGS() = message("tab.welcome.openSettings")
+    fun TAB_WELCOME_HELP() = message("tab.welcome.help")
     fun TAB_COPY_BUTTON() = message("tab.copyButton")
     fun TAB_TOGGLE_DETAILS() = message("tab.toggleDetails")
     fun TAB_COLLAPSE_DETAILS() = message("tab.collapseDetails")
@@ -140,7 +145,7 @@ object I18n {
     fun PROGRESS_DONE() = message("progress.done")
 
     // ── 执行结果（内联） ────────────────────────────────
-    fun EXEC_ATTACH_FAILED_INLINE() = message("exec.attachFailedInline")
+
     fun EXEC_ASYNC_NO_RESULT(seconds: Long) = message("exec.asyncNoResult", seconds)
 
     // ── 结果解析文本 ────────────────────────────────────

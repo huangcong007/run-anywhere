@@ -73,6 +73,9 @@
             icon="com.runanywhere.icons.RunAnywhereIcons.ToolWindow"
             factoryClass="com.runanywhere.ui.RunResultToolWindowFactory"/>
 
+        <!-- 项目打开时隐藏工具窗口按钮，首次调用方法后再出现（P1 A4） -->
+        <postStartupActivity implementation="com.runanywhere.lifecycle.HideUnusedToolWindowActivity"/>
+
         <!-- 项目级 Service：管理 Arthas 会话 -->
         <projectService
             serviceInterface="com.runanywhere.service.ArthasSessionService"

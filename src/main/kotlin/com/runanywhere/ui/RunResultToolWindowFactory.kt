@@ -1,23 +1,32 @@
 package com.runanywhere.ui
 
+import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.ide.CopyPasteManager
+import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.JBColor
+import com.intellij.ui.components.ActionLink
+import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.content.Content
 import com.intellij.ui.content.ContentFactory
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
+import com.runanywhere.RunAnywhereLinks
 import com.runanywhere.arthas.ArthasResponse
 import com.runanywhere.arthas.ArthasResponseParser
 import com.runanywhere.i18n.I18n
+import com.runanywhere.settings.RunAnywhereSettings
+import com.runanywhere.settings.RunAnywhereSettingsConfigurable
 import java.awt.BorderLayout
 import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.GridBagConstraints
+import java.awt.GridBagLayout
 import java.awt.datatransfer.StringSelection
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -35,9 +44,14 @@ class RunResultToolWindowFactory : ToolWindowFactory {
     companion object {
         private val LOG = logger<RunResultToolWindowFactory>()
 
-        /** 从标题中提取 PID；若无法提取则返回 "?"。 */
-        fun extractPid(tabTitle: String): String =
-            tabTitle.substringAfter("PID ").substringBefore(" ")
+        /** 工具窗口 id，与 plugin.xml 中 `<toolWindow id="...">` 保持一致。 */
+        const val TOOL_WINDOW_ID: String = "Run Anywhere"
+
+        /**
+         * 从标题中提取 PID；若无法提取则返回 "?"。
+         * 标题形如 `demoApp · PID 1234 test2() #2`，所以从最后一个 "PID " 之后取。
+         */
+        fun extractPid(tabTitle: String): String = com.runanywhere.ui.extractPid(tabTitle)
 
         /**
          * P1 A6：同名 Tab 加序号（`method() #2`），避免同一方法反复调用后
@@ -45,7 +59,7 @@ class RunResultToolWindowFactory : ToolWindowFactory {
          */
         fun uniqueTabTitle(project: Project, base: String): String {
             val toolWindow = project.getService(com.intellij.openapi.wm.ToolWindowManager::class.java)
-                ?.getToolWindow("Run Anywhere") ?: return base
+                ?.getToolWindow(TOOL_WINDOW_ID) ?: return base
             val existing = toolWindow.contentManager.contents.mapTo(HashSet()) { it.displayName }
             if (base !in existing) return base
             var index = 2
@@ -74,7 +88,11 @@ class RunResultToolWindowFactory : ToolWindowFactory {
             command: String,
         ): Content? {
             val toolWindow = project.getService(com.intellij.openapi.wm.ToolWindowManager::class.java)
-                ?.getToolWindow("Run Anywhere") ?: return null
+                ?.getToolWindow(TOOL_WINDOW_ID) ?: return null
+            // P1 A4：默认隐藏，首次执行时才注册到 stripe 并显示。
+            // 记住"见过"，后续项目打开不再隐藏。
+            RunAnywhereSettings.setToolWindowRevealed(true)
+            toolWindow.setAvailable(true, null)
             toolWindow.show()
             val contentManager = toolWindow.contentManager
             val panel = ResultPanel.createRunning(tabTitle, command)
@@ -102,7 +120,8 @@ class RunResultToolWindowFactory : ToolWindowFactory {
         fun showResult(project: Project, result: InvocationResult) {
             ApplicationManager.getApplication().invokeLater {
                 val toolWindow = project.getService(com.intellij.openapi.wm.ToolWindowManager::class.java)
-                    ?.getToolWindow("Run Anywhere") ?: return@invokeLater
+                    ?.getToolWindow(TOOL_WINDOW_ID) ?: return@invokeLater
+                toolWindow.setAvailable(true, null)
                 toolWindow.show()
                 val contentManager = toolWindow.contentManager
                 val panel = ResultPanel.createCompleted(result)
@@ -134,32 +153,88 @@ class RunResultToolWindowFactory : ToolWindowFactory {
     }
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
-        // P1 A5：空态改用中文并引导操作
+        toolWindow.contentManager.addContent(createWelcomeContent(project))
+        toolWindow.setTitleActions(listOf(CloseAllTabsAction(toolWindow)))
+    }
+
+    /**
+     * P1 A5：空态 = 原因 + 动作 + 帮助链接。
+     *
+     * 不要只放一段静态文字：用户点进来时应该能直接做下一步（打开设置 / 看使用说明）。
+     */
+    private fun createWelcomeContent(project: Project): Content {
+        val title = JBLabel(I18n.TAB_WELCOME_TITLE()).apply {
+            font = font.deriveFont(Font.BOLD, font.size2D + 1f)
+        }
+        val description = JBTextArea(I18n.TAB_WELCOME_TEXT()).apply {
+            isEditable = false
+            isOpaque = false
+            isFocusable = false
+            lineWrap = true
+            wrapStyleWord = true
+            foreground = UIUtil.getContextHelpForeground()
+            font = UIUtil.getLabelFont()
+            border = JBUI.Borders.empty()
+        }
+        val openSettings = JButton(I18n.TAB_WELCOME_OPEN_SETTINGS()).apply {
+            addActionListener {
+                ShowSettingsUtil.getInstance()
+                    .showSettingsDialog(project, RunAnywhereSettingsConfigurable::class.java)
+            }
+        }
+        val helpLink = ActionLink(I18n.TAB_WELCOME_HELP()) {
+            BrowserUtil.browse(RunAnywhereLinks.DOCS_URL)
+        }
+        val actions = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(8), 0)).apply {
+            isOpaque = false
+            add(openSettings)
+            add(helpLink)
+        }
+
+        val body = JPanel(GridBagLayout()).apply {
+            isOpaque = false
+            val constraints = GridBagConstraints().apply {
+                gridx = 0
+                gridy = 0
+                weightx = 1.0
+                weighty = 0.0
+                fill = GridBagConstraints.HORIZONTAL
+                anchor = GridBagConstraints.WEST
+                insets = JBUI.insetsBottom(6)
+            }
+            add(title, constraints)
+            constraints.gridy = 1
+            constraints.insets = JBUI.insetsBottom(12)
+            add(description, constraints)
+            constraints.gridy = 2
+            constraints.insets = JBUI.emptyInsets()
+            add(actions, constraints)
+            // 占位行：把内容顶到左上，避免窗口拉高后控件被拉伸
+            constraints.gridy = 3
+            constraints.weighty = 1.0
+            constraints.fill = GridBagConstraints.BOTH
+            add(JPanel().apply { isOpaque = false }, constraints)
+        }
         val panel = JPanel(BorderLayout()).apply {
             border = JBUI.Borders.empty(16)
-            add(JBTextArea().apply {
-                isEditable = false
-                lineWrap = true
-                wrapStyleWord = true
-                isOpaque = false
-                background = UIUtil.getTextFieldBackground()
-                foreground = UIUtil.getContextHelpForeground()
-                font = Font(font.name, Font.ITALIC, font.size)
-                text = I18n.TAB_WELCOME_TEXT()
-            }, BorderLayout.CENTER)
+            add(body, BorderLayout.CENTER)
         }
-        val content = ContentFactory.getInstance().createContent(panel, I18n.WELCOME_TAB_NAME(), false)
-        content.isCloseable = false
-        toolWindow.contentManager.addContent(content)
-
-        val closeAllAction = CloseAllTabsAction(toolWindow)
-        toolWindow.setTitleActions(listOf(closeAllAction))
+        return ContentFactory.getInstance()
+            .createContent(panel, I18n.WELCOME_TAB_NAME(), false)
+            .apply { isCloseable = false }
     }
 }
 
-/** 从标题中提取 PID；若无法提取则返回 "?"。 */
-internal fun extractPid(tabTitle: String): String =
-    tabTitle.substringAfter("PID ").substringBefore(" ")
+/**
+ * 从标题中提取 PID；标题里没有 "PID " 时返回 "?"。
+ *
+ * 标题形如 `demoApp · PID 1234 test2() #2`，从最后一个 "PID " 之后取，
+ * 避免运行配置名里也带 "PID" 字样时取错。
+ */
+internal fun extractPid(tabTitle: String): String {
+    if (!tabTitle.contains("PID ")) return "?"
+    return tabTitle.substringAfterLast("PID ").substringBefore(" ")
+}
 
 data class InvocationResult(
     val tabTitle: String,
