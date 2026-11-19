@@ -30,4 +30,7 @@ class RunAnywhereSettingsConfigurable : Configurable {
     override fun disposeUIResources() {
         component = null
     }
+
+    /** P2 C3：设置页提供 Help topic，方便用户查看文档。 */
+    override fun getHelpTopic(): String? = "run-anywhere-settings"
 }

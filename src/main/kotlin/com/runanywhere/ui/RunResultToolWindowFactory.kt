@@ -68,6 +68,7 @@ class RunResultToolWindowFactory : ToolWindowFactory {
             content.isCloseable = true
             contentManager.addContent(content)
             contentManager.setSelectedContent(content)
+            announceResult(panel, "方法执行已开始：$tabTitle")
             return content
         }
 
@@ -80,6 +81,7 @@ class RunResultToolWindowFactory : ToolWindowFactory {
                 val panel = content.component as? ResultPanel ?: return@invokeLater
                 panel.updateWithResult(result)
                 content.displayName = result.tabTitle
+                announceResult(panel, describeResult(result))
             }
         }
 
@@ -94,7 +96,26 @@ class RunResultToolWindowFactory : ToolWindowFactory {
                 content.isCloseable = true
                 contentManager.addContent(content)
                 contentManager.setSelectedContent(content)
+                announceResult(panel, describeResult(result))
             }
+        }
+
+        /** 生成结果摘要，供屏幕阅读器播报。 */
+        private fun describeResult(result: InvocationResult): String {
+            val pid = extractPid(result.tabTitle)
+            val status = when {
+                result.asyncMode && ArthasResponseParser.isAsyncSubmitted(result.response) -> "已提交（异步）"
+                result.isSuccess -> "成功"
+                else -> "失败"
+            }
+            return "Run Anywhere：PID $pid 调用 $status。"
+        }
+
+        /**
+         * 通过 [com.intellij.util.ui.accessibility.AccessibleAnnouncerUtil] 播报状态变化（P2 B10）。
+         */
+        private fun announceResult(panel: JPanel, message: String) {
+            com.intellij.util.ui.accessibility.AccessibleAnnouncerUtil.announce(panel, message, true)
         }
     }
 
