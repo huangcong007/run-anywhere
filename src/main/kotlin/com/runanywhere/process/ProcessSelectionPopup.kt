@@ -37,6 +37,11 @@ object ProcessSelectionPopup {
             }
             processes.size == 1 -> {
                 onSelected(processes.first())
+                RunAnywhereNotifications.info(
+                    project,
+                    "已选择进程",
+                    "自动选择 PID ${processes.first().pid}（${processes.first().displayName}）。"
+                )
                 true
             }
             else -> {
@@ -47,6 +52,11 @@ object ProcessSelectionPopup {
                 }
                 if (autoSelected != null) {
                     onSelected(autoSelected)
+                    RunAnywhereNotifications.info(
+                        project,
+                        "已选择进程",
+                        "自动匹配到 PID ${autoSelected.pid}（${autoSelected.displayName}）。"
+                    )
                 } else {
                     showChooser(project, processes, onSelected)
                 }

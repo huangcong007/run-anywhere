@@ -176,8 +176,11 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
 
     /**
      * Attach Arthas 到目标 JVM。同一 PID 串行，不同 PID 可以并行等待就绪。
+     *
+     * @param onProgress 进度回调，取值 0.0–1.0，由调用方（如 [com.intellij.openapi.progress.ProgressIndicator]）消费。
+     *                  若为 null 则不做进度上报（保持旧行为兼容）。
      */
-    fun attach(pid: Long): Boolean {
+    fun attach(pid: Long, onProgress: ((Double) -> Unit)? = null): Boolean {
         synchronized(pidLock(pid)) {
             val existing = sessions[pid]
             if (existing != null) {
@@ -185,7 +188,7 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
                 detachLocked(pid)
             }
             return try {
-                attachNew(pid)
+                attachNew(pid, onProgress)
             } catch (e: Exception) {
                 LOG.error("Failed to attach Arthas to PID $pid", e)
                 false
@@ -193,7 +196,7 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
         }
     }
 
-    private fun attachNew(pid: Long): Boolean {
+    private fun attachNew(pid: Long, onProgress: ((Double) -> Unit)? = null): Boolean {
         val jarPath = ensureArthasJar()
         var httpPort: Int? = null
         var telnetPort: Int? = null
@@ -232,7 +235,9 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
             process = processBuilder.start()
             val httpClient = ArthasHttpClient(port = http)
             startOutputReader(process, pid)
-            val ready = waitForHttpReady(httpClient, http, timeoutMs = 60000)
+            val ready = waitForHttpReady(httpClient, http, timeoutMs = 60000) { fraction ->
+                onProgress?.invoke(fraction)
+            }
             if (!ready) {
                 LOG.warn("Arthas attach to PID $pid timed out. process alive=${process.isAlive}")
                 return false
@@ -377,13 +382,19 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
         }.start()
     }
 
-    private fun waitForHttpReady(client: ArthasHttpClient, port: Int, timeoutMs: Long): Boolean {
+    private fun waitForHttpReady(
+        client: ArthasHttpClient,
+        port: Int,
+        timeoutMs: Long,
+        onProgress: ((Double) -> Unit)? = null,
+    ): Boolean {
         val start = System.currentTimeMillis()
         while (System.currentTimeMillis() - start < timeoutMs) {
             if (isPortOpen(port) && client.isAvailable()) {
                 return true
             }
             Thread.sleep(200)
+            onProgress?.invoke((System.currentTimeMillis() - start).toDouble() / timeoutMs)
         }
         return false
     }

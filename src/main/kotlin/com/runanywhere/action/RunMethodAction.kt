@@ -8,6 +8,10 @@ import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.progress.DumbProgressIndicator
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
@@ -20,6 +24,7 @@ import com.runanywhere.arthas.ArthasResponseParser
 import com.runanywhere.arthas.OgnlExpressionBuilder
 import com.runanywhere.concurrent.RunAnywhereExecutors
 import com.runanywhere.process.ProcessSelectionPopup
+import com.runanywhere.process.RunningProcess
 import com.runanywhere.process.RunningProcessDetector
 import com.runanywhere.psi.MethodMetadata
 import com.runanywhere.psi.MethodMetadataExtractor
@@ -72,7 +77,7 @@ class RunMethodAction : AnAction() {
         ) { process ->
             invokeViaArthas(
                 project, metadata, ognlArgs, execTimeoutMs, asyncExecution, expandLevel,
-                process.pid, process.displayName
+                process.pid, process.displayName, process
             )
         }
     }
@@ -108,7 +113,8 @@ class RunMethodAction : AnAction() {
         asyncExecution: Boolean,
         expandLevel: Int,
         pid: Long,
-        processName: String
+        processName: String,
+        runningProcess: RunningProcess,
     ) {
         val tabTitle = "PID $pid ${metadata.methodName}()"
         val needsInstancePick = !metadata.isStatic && metadata.springBeanName == null && !metadata.isConstructor
@@ -118,72 +124,168 @@ class RunMethodAction : AnAction() {
             OgnlExpressionBuilder.buildCommand(metadata, ognlArgs, expandLevel = expandLevel)
         }
         val runningContent = RunResultToolWindowFactory.showRunning(project, tabTitle, preliminary)
+            ?: return
 
-        RunAnywhereExecutors.executeMethod {
-            if (project.isDisposed) return@executeMethod
-            val arthasManager = ArthasSessionService.getInstance(project).arthasManager
-            LOG.info("RunMethod: executing in thread ${Thread.currentThread().name}")
-
-            if (!arthasManager.isAttached(pid)) {
-                val attached = arthasManager.attach(pid)
-                if (!attached) {
-                    RunAnywhereNotifications.error(
-                        project,
-                        "Attach 失败",
-                        "Arthas attach 到 PID $pid ($processName) 失败。\n" +
-                            "可能原因：\n" +
-                            "1. 目标 JVM 不允许 attach\n" +
-                            "2. Arthas 启动超时\n" +
-                            "3. HTTP 端口被占用\n\n" +
-                            "请查看 idea.log 获取详细日志（搜索 [Arthas]）。"
+        // P1 B6+B7：进度 + 取消 —— 使用 ProgressManager 提供可取消的进度指示
+        try {
+            ProgressManager.getInstance().runProcess(
+                {
+                    RunAnywhereExecutors.executeMethod(
+                        { i: ProgressIndicator ->
+                            doExecuteMethod(
+                                i, project, metadata, ognlArgs, execTimeoutMs,
+                                asyncExecution, expandLevel, pid, runningContent,
+                                tabTitle, preliminary
+                            )
+                        },
+                        ProgressManager.getInstance().getProgressIndicator() ?: DumbProgressIndicator()
                     )
-                    val failResponse = ArthasResponse(-1, "", false, "Arthas attach 失败")
-                    RunResultToolWindowFactory.updateResult(
-                        project, runningContent,
-                        InvocationResult(tabTitle, preliminary, failResponse)
-                    )
-                    return@executeMethod
-                }
-            }
-
-            val instanceIndex = if (!needsInstancePick) {
-                0
-            } else {
-                resolveInstanceIndex(project, arthasManager, metadata, pid, execTimeoutMs, tabTitle, runningContent)
-                    ?: return@executeMethod
-            }
-            val command = OgnlExpressionBuilder.buildCommand(
-                metadata, ognlArgs, instanceIndex, expandLevel
+                },
+                createCancelableIndicator(project, "运行 ${metadata.methodName}()")
             )
-            LOG.info("RunMethod: executing command: $command (async=$asyncExecution, timeout=${execTimeoutMs}ms)")
-            val response = arthasManager.exec(pid, command, execTimeoutMs, asyncExecution)
-            LOG.info("RunMethod: response success=${response.isSuccess}, status=${response.statusCode}")
-            val finalResponse = if (asyncExecution && ArthasResponseParser.isAsyncSubmitted(response)) {
-                RunResultToolWindowFactory.updateResult(
-                    project, runningContent,
-                    InvocationResult(tabTitle, command, response, asyncMode = true)
-                )
-                arthasManager.awaitAsyncResult(pid, response, execTimeoutMs) { !project.isDisposed }
-            } else {
-                response
-            }
-            // 异步失败或执行结果非成功时，通过气球通知告知用户（避免仅靠 Tab 状态判断）
-            val isStillAsync = ArthasResponseParser.isAsyncSubmitted(finalResponse) &&
-                !ArthasResponseParser.hasExecutionOutput(finalResponse)
-            if (!isStillAsync && !finalResponse.isSuccess) {
-                RunAnywhereNotifications.error(project, "方法调用失败",
-                    "PID $pid ${metadata.methodName}() 返回失败。\n请查看工具窗口了解详情。")
-            }
+        } catch (e: ProcessCanceledException) {
             RunResultToolWindowFactory.updateResult(
                 project, runningContent,
-                InvocationResult(
-                    tabTitle,
-                    command,
-                    finalResponse,
-                    asyncMode = asyncExecution && isStillAsync
-                )
+                InvocationResult(tabTitle, preliminary, ArthasResponse(-1, "", false, "已取消。"))
             )
         }
+    }
+
+    private fun createCancelableIndicator(project: Project, title: String): ProgressIndicator {
+        val indicator = ProgressManager.getInstance().getProgressIndicator()
+        if (indicator != null) {
+            indicator.text = title
+            return indicator
+        }
+        // 无现有 indicator 时创建一个可取消的进度指示器（不阻塞 UI）
+        return object : com.intellij.openapi.progress.DumbProgressIndicator() {}
+    }
+
+    private fun doExecuteMethod(
+        indicator: ProgressIndicator,
+        project: Project,
+        metadata: MethodMetadata,
+        ognlArgs: List<String>,
+        execTimeoutMs: Long,
+        asyncExecution: Boolean,
+        expandLevel: Int,
+        pid: Long,
+        runningContent: Content?,
+        tabTitle: String,
+        preliminary: String,
+    ) {
+        if (project.isDisposed) return
+        if (indicator.isCanceled) {
+            RunResultToolWindowFactory.updateResult(
+                project, runningContent,
+                InvocationResult(tabTitle, preliminary, ArthasResponse(-1, "", false, "已取消。"))
+            )
+            return
+        }
+        indicator.text = "连接目标进程（attach）..."
+        val arthasManager = ArthasSessionService.getInstance(project).arthasManager
+        LOG.info("RunMethod: executing in thread ${Thread.currentThread().name}")
+
+        if (!arthasManager.isAttached(pid)) {
+            val attached = arthasManager.attach(pid) { fraction ->
+                if (!indicator.isCanceled) indicator.fraction = 0.3 * fraction
+            }
+            if (!attached) {
+                if (indicator.isCanceled) {
+                    RunResultToolWindowFactory.updateResult(
+                        project, runningContent,
+                        InvocationResult(tabTitle, preliminary, ArthasResponse(-1, "", false, "已取消。"))
+                    )
+                    return
+                }
+                RunAnywhereNotifications.error(
+                    project,
+                    "Attach 失败",
+                    "Arthas attach 到 PID $pid 失败。\n" +
+                        "可能原因：\n" +
+                        "1. 目标 JVM 不允许 attach\n" +
+                        "2. Arthas 启动超时\n" +
+                        "3. HTTP 端口被占用\n\n" +
+                        "请查看 idea.log 获取详细日志（搜索 [Arthas]）。"
+                )
+                RunResultToolWindowFactory.updateResult(
+                    project, runningContent,
+                    InvocationResult(tabTitle, preliminary, ArthasResponse(-1, "", false, "Arthas attach 失败"))
+                )
+                return
+            }
+        }
+        indicator.text = "执行 ${metadata.methodName}()..."
+        indicator.fraction = 0.5
+
+        val needsInstancePick = !metadata.isStatic && metadata.springBeanName == null && !metadata.isConstructor
+        val instanceIndex = if (!needsInstancePick) {
+            0
+        } else {
+            if (indicator.isCanceled) {
+                RunResultToolWindowFactory.updateResult(
+                    project, runningContent,
+                    InvocationResult(tabTitle, OgnlExpressionBuilder.buildCommand(metadata, ognlArgs, 0, expandLevel),
+                        ArthasResponse(-1, "", false, "已取消。"))
+                )
+                return
+            }
+            resolveInstanceIndex(project, arthasManager, metadata, pid, execTimeoutMs, tabTitle, runningContent, indicator)
+                ?: return
+        }
+        if (indicator.isCanceled) {
+            RunResultToolWindowFactory.updateResult(
+                project, runningContent,
+                InvocationResult(tabTitle, OgnlExpressionBuilder.buildCommand(metadata, ognlArgs, instanceIndex, expandLevel),
+                    ArthasResponse(-1, "", false, "已取消。"))
+            )
+            return
+        }
+        val command = OgnlExpressionBuilder.buildCommand(
+            metadata, ognlArgs, instanceIndex, expandLevel
+        )
+        LOG.info("RunMethod: executing command: $command (async=$asyncExecution, timeout=${execTimeoutMs}ms)")
+        val response = arthasManager.exec(pid, command, execTimeoutMs, asyncExecution)
+        LOG.info("RunMethod: response success=${response.isSuccess}, status=${response.statusCode}")
+        indicator.fraction = 0.8
+        indicator.text = "等待结果..."
+        val finalResponse = if (asyncExecution && ArthasResponseParser.isAsyncSubmitted(response)) {
+            RunResultToolWindowFactory.updateResult(
+                project, runningContent,
+                InvocationResult(tabTitle, command, response, asyncMode = true)
+            )
+            arthasManager.awaitAsyncResult(pid, response, execTimeoutMs) {
+                !project.isDisposed && !indicator.isCanceled
+            }
+        } else {
+            response
+        }
+        if (indicator.isCanceled) {
+            RunResultToolWindowFactory.updateResult(
+                project, runningContent,
+                InvocationResult(tabTitle, command,
+                    ArthasResponse(-1, "", false, "已取消。"),
+                    asyncMode = asyncExecution)
+            )
+            return
+        }
+        val isStillAsync = ArthasResponseParser.isAsyncSubmitted(finalResponse) &&
+            !ArthasResponseParser.hasExecutionOutput(finalResponse)
+        if (!isStillAsync && !finalResponse.isSuccess) {
+            RunAnywhereNotifications.error(project, "方法调用失败",
+                "PID $pid ${metadata.methodName}() 返回失败。\n请查看工具窗口了解详情。")
+        }
+        indicator.fraction = 1.0
+        indicator.text = "完成"
+        RunResultToolWindowFactory.updateResult(
+            project, runningContent,
+            InvocationResult(
+                tabTitle,
+                command,
+                finalResponse,
+                asyncMode = asyncExecution && isStillAsync
+            )
+        )
     }
 
     /**
@@ -196,10 +298,12 @@ class RunMethodAction : AnAction() {
         pid: Long,
         execTimeoutMs: Long,
         tabTitle: String,
-        runningContent: Content?
+        runningContent: Content?,
+        indicator: ProgressIndicator,
     ): Int? {
         val countCommand = OgnlExpressionBuilder.buildInstanceCountCommand(metadata.className)
         val countResponse = arthasManager.exec(pid, countCommand, execTimeoutMs, async = false)
+        if (indicator.isCanceled) return null
         val count = ArthasResponseParser.parseIntValue(countResponse)
         if (count == null) {
             RunResultToolWindowFactory.updateResult(
