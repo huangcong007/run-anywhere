@@ -6,6 +6,7 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.ui.content.Content
+import com.runanywhere.i18n.I18n
 
 /**
  * 关闭工具窗口中所有可关闭的结果 Tab（保留 Welcome Tab）。
@@ -15,8 +16,8 @@ import com.intellij.ui.content.Content
 class CloseAllTabsAction(
     private val toolWindow: ToolWindow
 ) : DumbAwareAction(
-    "全部关闭",
-    "关闭所有结果 Tab（保留 Welcome）",
+    I18n.ACTION_CLOSE_ALL_TEXT(),
+    I18n.ACTION_CLOSE_ALL_DESCRIPTION(),
     AllIcons.General.Close
 ) {
     override fun actionPerformed(e: AnActionEvent) {

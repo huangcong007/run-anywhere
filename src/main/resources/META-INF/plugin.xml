@@ -96,7 +96,7 @@
             id="com.runanywhere.RunMethodAction"
             class="com.runanywhere.action.RunMethodAction"
             icon="com.runanywhere.icons.RunAnywhereIcons.ToolWindow"
-            text="运行方法 (Run Anywhere)"
+            text="运行方法"
             description="通过内置 Arthas 调用运行中 JVM 内的该方法">
             <add-to-group group-id="EditorPopupMenu" anchor="first"/>
             <keyboard-shortcut keymap="$default" first-keystroke="alt shift A"/>

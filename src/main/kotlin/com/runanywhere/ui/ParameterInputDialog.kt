@@ -6,6 +6,7 @@ import com.intellij.openapi.ui.ValidationInfo
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.UIUtil
+import com.runanywhere.i18n.I18n
 import com.runanywhere.psi.MethodMetadata
 import com.runanywhere.psi.ParamTypeKind
 import java.awt.Dimension
@@ -31,8 +32,8 @@ class ParameterInputDialog(
     private var ognlArgs: List<String> = emptyList()
 
     init {
-        title = "输入方法参数"
-        setOKButtonText("调用")
+        title = I18n.PARAM_DIALOG_TITLE()
+        setOKButtonText(I18n.PARAM_OK_BUTTON())
         init()
     }
 
@@ -45,15 +46,15 @@ class ParameterInputDialog(
 
         if (parameters.isEmpty()) {
             gbc.gridx = 0; gbc.gridy = 0
-            panel.add(JLabel("该方法无参数。"), gbc)
+            panel.add(JLabel(I18n.PARAM_EMPTY()), gbc)
             return panel
         }
 
         gbc.gridy = 0
-        gbc.gridx = 0; panel.add(JLabel("参数名"), gbc)
-        gbc.gridx = 1; panel.add(JLabel("类型"), gbc)
-        gbc.gridx = 2; panel.add(JLabel("值"), gbc)
-        gbc.gridx = 3; panel.add(JLabel("传 null"), gbc)
+        gbc.gridx = 0; panel.add(JLabel(I18n.PARAM_COLUMN_NAME()), gbc)
+        gbc.gridx = 1; panel.add(JLabel(I18n.PARAM_COLUMN_TYPE()), gbc)
+        gbc.gridx = 2; panel.add(JLabel(I18n.PARAM_COLUMN_VALUE()), gbc)
+        gbc.gridx = 3; panel.add(JLabel(I18n.PARAM_COLUMN_NULL()), gbc)
 
         parameters.forEachIndexed { index, param ->
             gbc.gridy = index + 1
@@ -64,10 +65,10 @@ class ParameterInputDialog(
             gbc.gridx = 1
             val typeLabel = JLabel(formatTypeLabel(param)).apply {
                 if (!OgnlLiteralConverter.isSupportedInputType(param)) {
-                    toolTipText = "不支持的类型，将传 null"
+                    toolTipText = I18n.PARAM_UNSUPPORTED_TYPE()
                     foreground = UIUtil.getLabelDisabledForeground()
                 } else if (JsonInputValidator.requiresJsonInput(param.kind)) {
-                    toolTipText = "通过 JSON 输入；反序列化库可在 Settings → Other Settings → Run Anywhere 配置"
+                    toolTipText = I18n.PARAM_JSON_HINT()
                 }
             }
             panel.add(typeLabel, gbc)
@@ -84,7 +85,7 @@ class ParameterInputDialog(
             gbc.gridx = 3
             val nullCb = JCheckBox().apply {
                 // P1 C5：为屏幕阅读器提供 accessibleName
-                accessibleContext.accessibleName = "是否将参数 ${param.name} 设为 null"
+                accessibleContext.accessibleName = I18n.PARAM_NULL_ACCESSIBLE_NAME(param.name)
                 addActionListener { setInputEnabled(input, !isSelected) }
             }
             nullCheckBoxes.add(nullCb)
@@ -109,10 +110,10 @@ class ParameterInputDialog(
             }
         } else {
             val placeholder = when {
-                param.isEnum -> "枚举常量名，如 ACTIVE"
-                param.type == "long" || param.type == "java.lang.Long" -> "数字，如 123 或 123L"
-                param.type.startsWith("java.time.") -> "ISO-8601，如 2026-10-08T15:04:05"
-                else -> "输入值，留空表示 null"
+                param.isEnum -> I18n.PARAM_PLACEHOLDER_ENUM()
+                param.type == "long" || param.type == "java.lang.Long" -> I18n.PARAM_PLACEHOLDER_LONG()
+                param.type.startsWith("java.time.") -> I18n.PARAM_PLACEHOLDER_TIME()
+                else -> I18n.PARAM_PLACEHOLDER_DEFAULT()
             }
             JBTextField(20).apply {
                 emptyText.text = placeholder

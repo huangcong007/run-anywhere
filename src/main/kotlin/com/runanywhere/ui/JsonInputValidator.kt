@@ -2,6 +2,7 @@ package com.runanywhere.ui
 
 import com.google.gson.JsonParser
 import com.google.gson.JsonSyntaxException
+import com.runanywhere.i18n.I18n
 import com.runanywhere.psi.ParamTypeKind
 
 /**
@@ -29,17 +30,17 @@ object JsonInputValidator {
     }
 
     fun expectedJsonHint(kind: ParamTypeKind): String = when (kind) {
-        ParamTypeKind.OBJECT -> "JSON 对象，如 {\"id\":1,\"name\":\"test\"}"
-        ParamTypeKind.ARRAY, ParamTypeKind.COLLECTION -> "JSON 数组，如 [{\"id\":1}] 或 [1,2,3]"
-        ParamTypeKind.MAP -> "JSON 对象，如 {\"key1\":{\"id\":1}}"
+        ParamTypeKind.OBJECT -> I18n.JSON_HINT_OBJECT()
+        ParamTypeKind.ARRAY, ParamTypeKind.COLLECTION -> I18n.JSON_HINT_ARRAY()
+        ParamTypeKind.MAP -> I18n.JSON_HINT_MAP()
         else -> ""
     }
 
     fun validationErrorMessage(paramName: String, kind: ParamTypeKind): String = when (kind) {
-        ParamTypeKind.OBJECT -> "参数 $paramName 需要有效的 JSON 对象（以 { 开头）。"
-        ParamTypeKind.ARRAY, ParamTypeKind.COLLECTION -> "参数 $paramName 需要有效的 JSON 数组（以 [ 开头）。"
-        ParamTypeKind.MAP -> "参数 $paramName 需要有效的 JSON 对象（以 { 开头）。"
-        else -> "参数 $paramName 的 JSON 格式无效。"
+        ParamTypeKind.OBJECT -> I18n.JSON_ERROR_OBJECT(paramName)
+        ParamTypeKind.ARRAY, ParamTypeKind.COLLECTION -> I18n.JSON_ERROR_ARRAY(paramName)
+        ParamTypeKind.MAP -> I18n.JSON_ERROR_MAP(paramName)
+        else -> I18n.JSON_ERROR_GENERIC(paramName)
     }
 
     private val JSON_INPUT_KINDS = setOf(

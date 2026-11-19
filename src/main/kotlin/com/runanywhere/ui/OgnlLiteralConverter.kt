@@ -1,5 +1,6 @@
 package com.runanywhere.ui
 
+import com.runanywhere.i18n.I18n
 import com.runanywhere.psi.MethodMetadata
 import com.runanywhere.psi.ParamTypeKind
 import com.runanywhere.settings.RunAnywhereSettings
@@ -136,32 +137,32 @@ object OgnlLiteralConverter {
         if (!isSupportedInputType(param)) return null
         if (param.isEnum) {
             return if (trimmed.matches(ENUM_NAME)) null
-            else "参数 ${param.name} 需要枚举常量名，例如 ACTIVE。"
+            else I18n.VALIDATE_ENUM(param.name)
         }
         val type = param.type
         return when {
             type == "boolean" || type == "java.lang.Boolean" ->
                 if (trimmed == "true" || trimmed == "false") null
-                else "参数 ${param.name} 需要 true 或 false。"
+                else I18n.VALIDATE_BOOLEAN(param.name)
             type == "char" || type == "java.lang.Character" ->
                 if (trimmed.length == 1) null
-                else "参数 ${param.name} 需要一个字符。"
+                else I18n.VALIDATE_CHAR(param.name)
             type == "long" || type == "java.lang.Long" ->
                 if (trimmed.matches(LONG_LITERAL)) null
-                else "参数 ${param.name} 需要整数，例如 123 或 123L。"
+                else I18n.VALIDATE_LONG(param.name)
             type == "float" || type == "double" ||
                 type == "java.lang.Float" || type == "java.lang.Double" ->
                 if (trimmed.matches(DECIMAL_LITERAL)) null
-                else "参数 ${param.name} 需要数字，例如 1.5。"
+                else I18n.VALIDATE_DECIMAL(param.name)
             type == "java.math.BigDecimal" ->
                 if (trimmed.matches(BIG_DECIMAL_LITERAL)) null
-                else "参数 ${param.name} 需要数字，例如 99.99。"
+                else I18n.VALIDATE_BIG_DECIMAL(param.name)
             type == "java.math.BigInteger" ->
                 if (trimmed.matches(INTEGER_LITERAL)) null
-                else "参数 ${param.name} 需要整数，例如 99。"
+                else I18n.VALIDATE_BIG_INTEGER(param.name)
             param.isPrimitive || type in NUMERIC_TYPES ->
                 if (trimmed.matches(INTEGER_LITERAL)) null
-                else "参数 ${param.name} 需要整数，例如 123。"
+                else I18n.VALIDATE_INTEGER(param.name)
             else -> null
         }
     }

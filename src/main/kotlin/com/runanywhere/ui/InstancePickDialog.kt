@@ -3,6 +3,7 @@ package com.runanywhere.ui
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
+import com.runanywhere.i18n.I18n
 import java.awt.BorderLayout
 import javax.swing.DefaultComboBoxModel
 import javax.swing.JComponent
@@ -23,10 +24,12 @@ class InstancePickDialog(
 
     init {
         val safeName = className.replace("&", "&amp;").replace("<", "&lt;")
-        centerLabel = JLabel("<html>类 $safeName 有 ${labels.size} 个实例，请选择要调用的那个。</html>")
-        title = "选择实例"
-        setOKButtonText("调用")
-        setCancelButtonText("取消")
+        centerLabel = JLabel(
+            "<html>" + I18n.INSTANCE_PICK_LABEL(safeName, labels.size) + "</html>"
+        )
+        title = I18n.INSTANCE_PICK_TITLE()
+        setOKButtonText(I18n.INSTANCE_PICK_OK())
+        setCancelButtonText(I18n.INSTANCE_PICK_CANCEL())
         init()
     }
 

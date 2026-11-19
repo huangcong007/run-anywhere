@@ -5,6 +5,7 @@ import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.psi.PsiMethod
 import com.intellij.ui.ColoredListCellRenderer
 import com.intellij.ui.SimpleTextAttributes
+import com.runanywhere.i18n.I18n
 import com.runanywhere.psi.MethodMetadata
 import com.runanywhere.ui.RunAnywhereNotifications
 import javax.swing.JList
@@ -30,17 +31,18 @@ object ProcessSelectionPopup {
             processes.isEmpty() -> {
                 RunAnywhereNotifications.warning(
                     project,
-                    "没有可调用的进程",
-                    "未检测到运行中的 Java 进程。请先运行你的应用程序，然后再调用方法。"
+                    I18n.SELECT_PROCESS_EMPTY_TITLE(),
+                    I18n.SELECT_PROCESS_EMPTY_BODY()
                 )
                 false
             }
             processes.size == 1 -> {
-                onSelected(processes.first())
+                val first = processes.first()
+                onSelected(first)
                 RunAnywhereNotifications.info(
                     project,
-                    "已选择进程",
-                    "自动选择 PID ${processes.first().pid}（${processes.first().displayName}）。"
+                    I18n.SELECT_PROCESS_INFO_TITLE(),
+                    I18n.SELECT_PROCESS_INFO_BODY(first.pid, first.displayName)
                 )
                 true
             }
@@ -54,8 +56,8 @@ object ProcessSelectionPopup {
                     onSelected(autoSelected)
                     RunAnywhereNotifications.info(
                         project,
-                        "已选择进程",
-                        "自动匹配到 PID ${autoSelected.pid}（${autoSelected.displayName}）。"
+                        I18n.SELECT_PROCESS_INFO_TITLE(),
+                        I18n.SELECT_PROCESS_INFO_BODY(autoSelected.pid, autoSelected.displayName)
                     )
                 } else {
                     showChooser(project, processes, onSelected)
@@ -80,7 +82,7 @@ object ProcessSelectionPopup {
     ) {
         val popup = JBPopupFactory.getInstance()
             .createPopupChooserBuilder(processes)
-            .setTitle("选择目标进程（未能自动匹配）")
+            .setTitle(I18n.SELECT_PROCESS_TITLE())
             .setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
             .setRenderer(object : ColoredListCellRenderer<RunningProcess>() {
                 override fun customizeCellRenderer(

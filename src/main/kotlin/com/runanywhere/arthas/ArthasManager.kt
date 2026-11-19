@@ -2,6 +2,7 @@ package com.runanywhere.arthas
 
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
+import com.runanywhere.i18n.I18n
 import com.runanywhere.settings.RunAnywhereSettings
 import java.io.File
 import java.net.InetSocketAddress
@@ -316,7 +317,7 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
             statusCode = submitted.statusCode,
             body = submitted.body,
             isSuccess = submitted.isSuccess,
-            errorMessage = "已提交，但在 ${waitTimeoutMs / 1000} 秒内没有等到返回值。若目标线程停在断点，继续执行后可重新调用。"
+            errorMessage = I18n.EXEC_ASYNC_NO_RESULT(waitTimeoutMs / 1000)
         )
     }
 

@@ -23,6 +23,7 @@ import com.runanywhere.arthas.ArthasResponse
 import com.runanywhere.arthas.ArthasResponseParser
 import com.runanywhere.arthas.OgnlExpressionBuilder
 import com.runanywhere.concurrent.RunAnywhereExecutors
+import com.runanywhere.i18n.I18n
 import com.runanywhere.process.ProcessSelectionPopup
 import com.runanywhere.process.RunningProcess
 import com.runanywhere.process.RunningProcessDetector
@@ -53,7 +54,7 @@ class RunMethodAction : AnAction() {
         if (metadata == null) {
             showHintOrNotification(
                 project, e,
-                "无法提取方法元数据。请确保该方法位于具有全限定名的类中。"
+                I18n.HINT_METHOD_UNAVAILABLE()
             )
             return
         }
@@ -102,7 +103,7 @@ class RunMethodAction : AnAction() {
             HintManager.getInstance().showErrorHint(editor, message)
             return
         }
-        RunAnywhereNotifications.error(project, "方法不可用", message)
+        RunAnywhereNotifications.error(project, I18n.NOTIFY_METHOD_UNAVAILABLE_TITLE(), message)
     }
 
     private fun invokeViaArthas(
@@ -119,7 +120,7 @@ class RunMethodAction : AnAction() {
         val tabTitle = "PID $pid ${metadata.methodName}()"
         val needsInstancePick = !metadata.isStatic && metadata.springBeanName == null && !metadata.isConstructor
         val preliminary = if (needsInstancePick) {
-            "正在查询 ${metadata.className} 的实例..."
+            I18n.PROGRESS_QUERY_INSTANCES(metadata.className)
         } else {
             OgnlExpressionBuilder.buildCommand(metadata, ognlArgs, expandLevel = expandLevel)
         }
@@ -134,19 +135,19 @@ class RunMethodAction : AnAction() {
                         { i: ProgressIndicator ->
                             doExecuteMethod(
                                 i, project, metadata, ognlArgs, execTimeoutMs,
-                                asyncExecution, expandLevel, pid, runningContent,
+                                asyncExecution, expandLevel, pid, processName, runningContent,
                                 tabTitle, preliminary
                             )
                         },
                         ProgressManager.getInstance().getProgressIndicator() ?: DumbProgressIndicator()
                     )
                 },
-                createCancelableIndicator(project, "运行 ${metadata.methodName}()")
+                createCancelableIndicator(project, I18n.PROGRESS_TITLE(metadata.methodName))
             )
         } catch (e: ProcessCanceledException) {
             RunResultToolWindowFactory.updateResult(
                 project, runningContent,
-                InvocationResult(tabTitle, preliminary, ArthasResponse(-1, "", false, "已取消。"))
+                InvocationResult(tabTitle, preliminary, ArthasResponse(-1, "", false, I18n.EXEC_CANCELLED()))
             )
         }
     }
@@ -170,6 +171,7 @@ class RunMethodAction : AnAction() {
         asyncExecution: Boolean,
         expandLevel: Int,
         pid: Long,
+        processName: String,
         runningContent: Content?,
         tabTitle: String,
         preliminary: String,
@@ -178,11 +180,11 @@ class RunMethodAction : AnAction() {
         if (indicator.isCanceled) {
             RunResultToolWindowFactory.updateResult(
                 project, runningContent,
-                InvocationResult(tabTitle, preliminary, ArthasResponse(-1, "", false, "已取消。"))
+                InvocationResult(tabTitle, preliminary, ArthasResponse(-1, "", false, I18n.EXEC_CANCELLED()))
             )
             return
         }
-        indicator.text = "连接目标进程（attach）..."
+        indicator.text = I18n.PROGRESS_ATTACH()
         val arthasManager = ArthasSessionService.getInstance(project).arthasManager
         LOG.info("RunMethod: executing in thread ${Thread.currentThread().name}")
 
@@ -194,28 +196,23 @@ class RunMethodAction : AnAction() {
                 if (indicator.isCanceled) {
                     RunResultToolWindowFactory.updateResult(
                         project, runningContent,
-                        InvocationResult(tabTitle, preliminary, ArthasResponse(-1, "", false, "已取消。"))
+                        InvocationResult(tabTitle, preliminary, ArthasResponse(-1, "", false, I18n.EXEC_CANCELLED()))
                     )
                     return
                 }
                 RunAnywhereNotifications.error(
                     project,
-                    "Attach 失败",
-                    "Arthas attach 到 PID $pid 失败。\n" +
-                        "可能原因：\n" +
-                        "1. 目标 JVM 不允许 attach\n" +
-                        "2. Arthas 启动超时\n" +
-                        "3. HTTP 端口被占用\n\n" +
-                        "请查看 idea.log 获取详细日志（搜索 [Arthas]）。"
+                    I18n.EXEC_ATTACH_FAIL_TITLE(),
+                    I18n.EXEC_ATTACH_FAIL_BODY(pid, processName)
                 )
                 RunResultToolWindowFactory.updateResult(
                     project, runningContent,
-                    InvocationResult(tabTitle, preliminary, ArthasResponse(-1, "", false, "Arthas attach 失败"))
+                    InvocationResult(tabTitle, preliminary, ArthasResponse(-1, "", false, I18n.EXEC_ATTACH_FAILED_INLINE()))
                 )
                 return
             }
         }
-        indicator.text = "执行 ${metadata.methodName}()..."
+        indicator.text = I18n.PROGRESS_EXECUTE(metadata.methodName)
         indicator.fraction = 0.5
 
         val needsInstancePick = !metadata.isStatic && metadata.springBeanName == null && !metadata.isConstructor
@@ -226,7 +223,7 @@ class RunMethodAction : AnAction() {
                 RunResultToolWindowFactory.updateResult(
                     project, runningContent,
                     InvocationResult(tabTitle, OgnlExpressionBuilder.buildCommand(metadata, ognlArgs, 0, expandLevel),
-                        ArthasResponse(-1, "", false, "已取消。"))
+                        ArthasResponse(-1, "", false, I18n.EXEC_CANCELLED()))
                 )
                 return
             }
@@ -237,7 +234,7 @@ class RunMethodAction : AnAction() {
             RunResultToolWindowFactory.updateResult(
                 project, runningContent,
                 InvocationResult(tabTitle, OgnlExpressionBuilder.buildCommand(metadata, ognlArgs, instanceIndex, expandLevel),
-                    ArthasResponse(-1, "", false, "已取消。"))
+                    ArthasResponse(-1, "", false, I18n.EXEC_CANCELLED()))
             )
             return
         }
@@ -248,7 +245,7 @@ class RunMethodAction : AnAction() {
         val response = arthasManager.exec(pid, command, execTimeoutMs, asyncExecution)
         LOG.info("RunMethod: response success=${response.isSuccess}, status=${response.statusCode}")
         indicator.fraction = 0.8
-        indicator.text = "等待结果..."
+        indicator.text = I18n.PROGRESS_WAIT_RESULT()
         val finalResponse = if (asyncExecution && ArthasResponseParser.isAsyncSubmitted(response)) {
             RunResultToolWindowFactory.updateResult(
                 project, runningContent,
@@ -264,7 +261,7 @@ class RunMethodAction : AnAction() {
             RunResultToolWindowFactory.updateResult(
                 project, runningContent,
                 InvocationResult(tabTitle, command,
-                    ArthasResponse(-1, "", false, "已取消。"),
+                    ArthasResponse(-1, "", false, I18n.EXEC_CANCELLED()),
                     asyncMode = asyncExecution)
             )
             return
@@ -272,11 +269,14 @@ class RunMethodAction : AnAction() {
         val isStillAsync = ArthasResponseParser.isAsyncSubmitted(finalResponse) &&
             !ArthasResponseParser.hasExecutionOutput(finalResponse)
         if (!isStillAsync && !finalResponse.isSuccess) {
-            RunAnywhereNotifications.error(project, "方法调用失败",
-                "PID $pid ${metadata.methodName}() 返回失败。\n请查看工具窗口了解详情。")
+            RunAnywhereNotifications.error(
+                project,
+                I18n.EXEC_FAIL_TITLE(),
+                I18n.EXEC_FAIL_BODY(pid, metadata.methodName)
+            )
         }
         indicator.fraction = 1.0
-        indicator.text = "完成"
+        indicator.text = I18n.PROGRESS_DONE()
         RunResultToolWindowFactory.updateResult(
             project, runningContent,
             InvocationResult(
@@ -318,7 +318,7 @@ class RunMethodAction : AnAction() {
                 InvocationResult(
                     tabTitle,
                     countCommand,
-                    ArthasResponse(-1, "", false, "类 ${metadata.className} 在目标 JVM 中没有已创建的实例。")
+                    ArthasResponse(-1, "", false, I18n.INSTANCE_PICK_NONE(metadata.className))
                 )
             )
             return null
@@ -341,7 +341,7 @@ class RunMethodAction : AnAction() {
                 InvocationResult(
                     tabTitle,
                     countCommand,
-                    ArthasResponse(-1, "", false, "已取消选择实例。")
+                    ArthasResponse(-1, "", false, I18n.INSTANCE_PICK_CANCELLED())
                 )
             )
         }
@@ -351,6 +351,9 @@ class RunMethodAction : AnAction() {
     override fun update(e: AnActionEvent) {
         val method = findPsiMethod(e)
         e.presentation.isEnabledAndVisible = method != null
+        // 菜单文案在运行时从 Bundle 取，plugin.xml 里的 text 仅作注册期占位
+        e.presentation.text = I18n.ACTION_TEXT()
+        e.presentation.description = I18n.ACTION_DESCRIPTION()
     }
 
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT

@@ -1,6 +1,7 @@
 package com.runanywhere.settings
 
 import com.intellij.openapi.options.Configurable
+import com.runanywhere.i18n.I18n
 import javax.swing.JComponent
 
 /**
@@ -10,7 +11,7 @@ class RunAnywhereSettingsConfigurable : Configurable {
 
     private var component: RunAnywhereSettingsComponent? = null
 
-    override fun getDisplayName(): String = "Run Anywhere"
+    override fun getDisplayName(): String = I18n.SETTINGS_NAME()
 
     override fun createComponent(): JComponent {
         component = RunAnywhereSettingsComponent().also { it.reset() }

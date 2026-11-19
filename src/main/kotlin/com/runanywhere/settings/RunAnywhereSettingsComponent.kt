@@ -6,6 +6,7 @@ import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.FormBuilder
 import com.intellij.util.ui.JBUI
+import com.runanywhere.i18n.I18n
 import javax.swing.DefaultComboBoxModel
 import javax.swing.JButton
 import javax.swing.JComponent
@@ -21,8 +22,8 @@ import javax.swing.SpinnerNumberModel
  */
 class RunAnywhereSettingsComponent {
 
-    private val asyncCheckBox = JBCheckBox("异步执行（后台等待返回值，断点不超时）")
-    private val warmupCheckBox = JBCheckBox("进程启动后预热 Attach")
+    private val asyncCheckBox = JBCheckBox(I18n.SETTINGS_ASYNC())
+    private val warmupCheckBox = JBCheckBox(I18n.SETTINGS_WARMUP())
 
     // 执行超时：受控 spinner（30–3600 秒），替代自由文本（P1 C1）
     private val timeoutSpinner: JSpinner = spinnerFor(
@@ -41,11 +42,11 @@ class RunAnywhereSettingsComponent {
     private val expandHintLabel = JBLabel()
 
     private val jsonLibraryCombo = ComboBox(
-        DefaultComboBoxModel(JsonLibrary.entries.map { it.displayName }.toTypedArray())
+        DefaultComboBoxModel(JsonLibrary.entries.map { it.displayName() }.toTypedArray())
     )
     // 恢复首次安全提示按钮：用户一旦勾选"不再提示"后无法在 UI 撤销，此处提供入口（P1 C8）
-    private val restoreSecurityButton = JButton("恢复首次安全提示").apply {
-        toolTipText = "重新开启首次调用前的风险确认对话框"
+    private val restoreSecurityButton = JButton(I18n.SETTINGS_RESTORE_SECURITY()).apply {
+        toolTipText = I18n.SETTINGS_RESTORE_SECURITY_TIP()
         setBounds(0, 0, 200, 30)
         addActionListener {
             ApplicationManager.getApplication().invokeLater {
@@ -57,13 +58,13 @@ class RunAnywhereSettingsComponent {
     private val panel: JPanel = FormBuilder.createFormBuilder()
         .addComponent(asyncCheckBox)
         .addComponent(warmupCheckBox)
-        .addLabeledComponent("执行超时（秒）", timeoutSpinner)
+        .addLabeledComponent(I18n.SETTINGS_TIMEOUT_LABEL(), timeoutSpinner)
         .addComponent(timeoutHintLabel)
-        .addLabeledComponent("结果展开层级", expandSpinner)
+        .addLabeledComponent(I18n.SETTINGS_EXPAND_LABEL(), expandSpinner)
         .addComponent(expandHintLabel)
-        .addLabeledComponent("对象参数 JSON 库", jsonLibraryCombo)
+        .addLabeledComponent(I18n.SETTINGS_JSON_LIB_LABEL(), jsonLibraryCombo)
         .addComponent(
-            JBLabel("无 Jackson 时可选手动指定 Gson / Fastjson；自动模式会按 classpath 依次尝试。")
+            JBLabel(I18n.SETTINGS_JSON_LIB_HINT())
         )
         .addComponent(restoreSecurityButton)
         .addComponentFillVertically(JPanel(), 0)
@@ -72,19 +73,16 @@ class RunAnywhereSettingsComponent {
         }
 
     init {
-        asyncCheckBox.toolTipText =
-            "使用 Arthas async_exec 提交命令，再拉取返回值。\n" +
-                "目标线程停在断点时不会触发插件 HTTP 超时。等待上限与执行超时相同。"
-        warmupCheckBox.toolTipText =
-            "应用启动约 2 秒后自动 Attach。关闭时只在点击「运行方法」后注入 Arthas。\n" +
-                "HTTP 只监听 127.0.0.1，会话超时 30 分钟。"
-        timeoutHintLabel.text =
-            "同步执行的 Arthas 超时，也是异步模式等待返回值的上限（" +
-                "${RunAnywhereSettings.MIN_EXEC_TIMEOUT_SECONDS}-" +
-                "${RunAnywhereSettings.MAX_EXEC_TIMEOUT_SECONDS} 秒）。"
-        expandHintLabel.text =
-            "Arthas -x 展开层级（${RunAnywhereSettings.MIN_RESULT_EXPAND_LEVEL}-" +
-                "${RunAnywhereSettings.MAX_RESULT_EXPAND_LEVEL}）。返回 void 时固定为 0。"
+        asyncCheckBox.toolTipText = I18n.SETTINGS_ASYNC_TIP()
+        warmupCheckBox.toolTipText = I18n.SETTINGS_WARMUP_TIP()
+        timeoutHintLabel.text = I18n.SETTINGS_TIMEOUT_HINT(
+            RunAnywhereSettings.MIN_EXEC_TIMEOUT_SECONDS,
+            RunAnywhereSettings.MAX_EXEC_TIMEOUT_SECONDS
+        )
+        expandHintLabel.text = I18n.SETTINGS_EXPAND_HINT(
+            RunAnywhereSettings.MIN_RESULT_EXPAND_LEVEL,
+            RunAnywhereSettings.MAX_RESULT_EXPAND_LEVEL
+        )
     }
 
     fun getPanel(): JComponent = panel
@@ -123,11 +121,11 @@ class RunAnywhereSettingsComponent {
 
     private fun selectedJsonLibrary(): JsonLibrary {
         val displayName = jsonLibraryCombo.selectedItem.toString()
-        return JsonLibrary.entries.find { it.displayName == displayName } ?: JsonLibrary.AUTO
+        return JsonLibrary.entries.find { it.displayName() == displayName } ?: JsonLibrary.AUTO
     }
 
     private fun selectJsonLibrary(library: JsonLibrary) {
-        jsonLibraryCombo.setSelectedItem(library.displayName)
+        jsonLibraryCombo.setSelectedItem(library.displayName())
     }
 
     private companion object {
