@@ -80,6 +80,8 @@ class I18nBundleTest {
         val english = ResourceBundle.getBundle("messages.RunAnywhereBundle", java.util.Locale.ENGLISH)
         assertEquals("Succeeded", english.getString("tab.status.success"))
         assertEquals("Welcome", english.getString("toolWindow.welcomeTab"))
+        // \u0020 转义要还原成空格，否则会输出 "Error:NullPointerException"
+        assertEquals("Error: ", english.getString("tab.error.prefix"))
     }
 
     private fun readProjectFile(relativePath: String): String {
