@@ -5,18 +5,53 @@
 
     <description><![CDATA[
         <h3>Run Anywhere</h3>
-        <p>Right-click on any Java method to invoke it in the running JVM via bundled Arthas.</p>
+        <p>在 IntelliJ IDEA 中右键任意 Java 方法，即可向当前正在运行的 JVM 注入 Arthas 并执行该方法，结果在底部工具窗口实时回显。</p>
+        <p><b>适用场景：</b>开发/调试环境（请勿用于生产）。</p>
+        <h4>核心能力</h4>
         <ul>
-            <li>Supports static methods, instance methods, and Spring Bean methods</li>
-            <li>Auto-detects Java processes started from IDEA</li>
-            <li>Simple type parameter input dialog</li>
-            <li>Structured result display in tool window</li>
+            <li>支持静态方法、实例方法、Spring Bean 方法、构造函数</li>
+            <li>自动检测从 IDEA 启动的 Java 进程（按模块匹配）</li>
+            <li>参数输入对话框：支持基本类型、集合、Map、枚举、java.time、JSON 对象</li>
+            <li>结果工具窗口：解析结果 + 可折叠原始响应 + 复制诊断信息</li>
+            <li>进度与取消：attach / 执行阶段在状态栏可见进度，可一键取消</li>
+            <li>异步执行：目标线程停在断点时不会触发 HTTP 超时</li>
+            <li>多实例选择：同一类有多个实例时弹窗选择</li>
+        </ul>
+        <h4>首次使用</h4>
+        <ol>
+            <li>启动你的 Java 应用（Run Configuration）</li>
+            <li>在编辑器中右键任意方法 → 选择「运行方法 (Run Anywhere)」（快捷键 Alt+Shift+A）</li>
+            <li>首次会弹出风险确认对话框，勾选「不再提示」可跳过</li>
+            <li>输入参数（如有），结果在底部 Run Anywhere 工具窗口显示</li>
+        </ol>
+        <h4>设置</h4>
+        <p>Settings → Other Settings → Run Anywhere：异步执行、预热 Attach、执行超时、结果展开层级、JSON 反序列化库、恢复安全提示。</p>
+        <h4>兼容性</h4>
+        <ul>
+            <li>IntelliJ IDEA 2026.1+（sinceBuild 261）</li>
+            <li>Java 17+（运行中的应用），JDK 25 构建</li>
+            <li>内置 Arthas 4.3.5（首次 attach 时自动下载）</li>
         </ul>
     ]]></description>
 
     <change-notes><![CDATA[
+        <b>0.2.0</b><br/>
+        <ul>
+            <li>新增：执行进度与取消（状态栏可见，可一键中断）</li>
+            <li>新增：结果工具窗口可折叠「原始响应 / 解析结果」，一键复制诊断信息</li>
+            <li>新增：设置页「恢复首次安全提示」按钮，可撤销「不再提示」</li>
+            <li>改进：数值输入改用受控 spinner（执行超时 / 展开层级）</li>
+            <li>改进：表单校验改平台内联提示，不再弹嵌套模态框</li>
+            <li>改进：主题色适配（Darcula / 高对比度下结果可读）</li>
+            <li>改进：错误反馈改气球通知，编辑器内用错误 Hint</li>
+            <li>改进：工具窗口图标提供 16/20 双尺寸灰阶版本</li>
+            <li>改进：空态文案改中文 + 引导操作</li>
+            <li>改进：结果变化通过屏幕阅读器播报（WCAG 4.1.3）</li>
+            <li>适配 IntelliJ IDEA 2026.3 / JDK 25 / Arthas 4.3.5</li>
+        </ul>
+
         <b>0.1.0</b><br/>
-        Initial version: basic method invocation via Arthas attach.
+        <p>初始版本：通过内置 Arthas attach 调用运行中 JVM 内的方法，结果在工具窗口展示。</p>
     ]]></change-notes>
 
     <!-- 依赖 Java 插件（必须，提供 PsiMethod 等 PSI API） -->
