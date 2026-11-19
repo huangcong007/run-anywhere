@@ -40,6 +40,20 @@ class RunResultToolWindowFactory : ToolWindowFactory {
             tabTitle.substringAfter("PID ").substringBefore(" ")
 
         /**
+         * P1 A6：同名 Tab 加序号（`method() #2`），避免同一方法反复调用后
+         * 多个 Tab 标题完全一样、无法分辨。序号按现存 Tab 计算，关掉后自动复用。
+         */
+        fun uniqueTabTitle(project: Project, base: String): String {
+            val toolWindow = project.getService(com.intellij.openapi.wm.ToolWindowManager::class.java)
+                ?.getToolWindow("Run Anywhere") ?: return base
+            val existing = toolWindow.contentManager.contents.mapTo(HashSet()) { it.displayName }
+            if (base !in existing) return base
+            var index = 2
+            while ("$base #$index" in existing) index++
+            return "$base #$index"
+        }
+
+        /**
          * 创建"执行中" Tab 并同步返回 Content。
          * 若不在 EDT，使用 invokeAndWait 确保 Content 可用。
          */

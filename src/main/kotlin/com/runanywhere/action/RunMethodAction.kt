@@ -8,10 +8,9 @@ import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.editor.Editor
-import com.intellij.openapi.progress.DumbProgressIndicator
 import com.intellij.openapi.progress.ProgressIndicator
-import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.ProcessCanceledException
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
@@ -22,7 +21,6 @@ import com.runanywhere.arthas.ArthasManager
 import com.runanywhere.arthas.ArthasResponse
 import com.runanywhere.arthas.ArthasResponseParser
 import com.runanywhere.arthas.OgnlExpressionBuilder
-import com.runanywhere.concurrent.RunAnywhereExecutors
 import com.runanywhere.i18n.I18n
 import com.runanywhere.process.ProcessSelectionPopup
 import com.runanywhere.process.RunningProcess
@@ -117,7 +115,9 @@ class RunMethodAction : AnAction() {
         processName: String,
         runningProcess: RunningProcess,
     ) {
-        val tabTitle = "PID $pid ${metadata.methodName}()"
+        val tabTitle = RunResultToolWindowFactory.uniqueTabTitle(
+            project, "PID $pid ${metadata.methodName}()"
+        )
         val needsInstancePick = !metadata.isStatic && metadata.springBeanName == null && !metadata.isConstructor
         val preliminary = if (needsInstancePick) {
             I18n.PROGRESS_QUERY_INSTANCES(metadata.className)
@@ -127,39 +127,28 @@ class RunMethodAction : AnAction() {
         val runningContent = RunResultToolWindowFactory.showRunning(project, tabTitle, preliminary)
             ?: return
 
-        // P1 B6+B7：进度 + 取消 —— 使用 ProgressManager 提供可取消的进度指示
-        try {
-            ProgressManager.getInstance().runProcess(
-                {
-                    RunAnywhereExecutors.executeMethod(
-                        { i: ProgressIndicator ->
-                            doExecuteMethod(
-                                i, project, metadata, ognlArgs, execTimeoutMs,
-                                asyncExecution, expandLevel, pid, processName, runningContent,
-                                tabTitle, preliminary
-                            )
-                        },
-                        ProgressManager.getInstance().getProgressIndicator() ?: DumbProgressIndicator()
+        // P1 B6+B7：真实进度 + 可取消。
+        // Task.Backgroundable 会在状态栏提供进度条与“取消”按钮，run() 跑在后台线程上，
+        // 不再出现“提交任务后 indicator 立刻消失”的问题。
+        object : Task.Backgroundable(project, I18n.PROGRESS_TITLE(metadata.methodName), true) {
+            override fun run(indicator: ProgressIndicator) {
+                try {
+                    doExecuteMethod(
+                        indicator, project, metadata, ognlArgs, execTimeoutMs,
+                        asyncExecution, expandLevel, pid, processName, runningContent,
+                        tabTitle, preliminary
                     )
-                },
-                createCancelableIndicator(project, I18n.PROGRESS_TITLE(metadata.methodName))
-            )
-        } catch (e: ProcessCanceledException) {
-            RunResultToolWindowFactory.updateResult(
-                project, runningContent,
-                InvocationResult(tabTitle, preliminary, ArthasResponse(-1, "", false, I18n.EXEC_CANCELLED()))
-            )
-        }
-    }
-
-    private fun createCancelableIndicator(project: Project, title: String): ProgressIndicator {
-        val indicator = ProgressManager.getInstance().getProgressIndicator()
-        if (indicator != null) {
-            indicator.text = title
-            return indicator
-        }
-        // 无现有 indicator 时创建一个可取消的进度指示器（不阻塞 UI）
-        return object : com.intellij.openapi.progress.DumbProgressIndicator() {}
+                } catch (e: ProcessCanceledException) {
+                    RunResultToolWindowFactory.updateResult(
+                        project, runningContent,
+                        InvocationResult(
+                            tabTitle, preliminary,
+                            ArthasResponse(-1, "", false, I18n.EXEC_CANCELLED())
+                        )
+                    )
+                }
+            }
+        }.queue()
     }
 
     private fun doExecuteMethod(
@@ -189,9 +178,13 @@ class RunMethodAction : AnAction() {
         LOG.info("RunMethod: executing in thread ${Thread.currentThread().name}")
 
         if (!arthasManager.isAttached(pid)) {
-            val attached = arthasManager.attach(pid) { fraction ->
-                if (!indicator.isCanceled) indicator.fraction = 0.3 * fraction
-            }
+            val attached = arthasManager.attach(
+                pid,
+                onProgress = { fraction ->
+                    if (!indicator.isCanceled) indicator.fraction = 0.3 * fraction
+                },
+                isCanceled = { indicator.isCanceled },
+            )
             if (!attached) {
                 if (indicator.isCanceled) {
                     RunResultToolWindowFactory.updateResult(

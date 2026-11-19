@@ -180,8 +180,14 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
      *
      * @param onProgress 进度回调，取值 0.0–1.0，由调用方（如 [com.intellij.openapi.progress.ProgressIndicator]）消费。
      *                  若为 null 则不做进度上报（保持旧行为兼容）。
+     * @param isCanceled 取消探测。返回 true 时立刻停止等待就绪并释放本次启动的 Arthas 进程，
+     *                   避免用户点“取消”后还要等满 60 秒超时（P1 B7）。
      */
-    fun attach(pid: Long, onProgress: ((Double) -> Unit)? = null): Boolean {
+    fun attach(
+        pid: Long,
+        onProgress: ((Double) -> Unit)? = null,
+        isCanceled: () -> Boolean = { false },
+    ): Boolean {
         synchronized(pidLock(pid)) {
             val existing = sessions[pid]
             if (existing != null) {
@@ -189,7 +195,7 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
                 detachLocked(pid)
             }
             return try {
-                attachNew(pid, onProgress)
+                attachNew(pid, onProgress, isCanceled)
             } catch (e: Exception) {
                 LOG.error("Failed to attach Arthas to PID $pid", e)
                 false
@@ -197,7 +203,11 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
         }
     }
 
-    private fun attachNew(pid: Long, onProgress: ((Double) -> Unit)? = null): Boolean {
+    private fun attachNew(
+        pid: Long,
+        onProgress: ((Double) -> Unit)? = null,
+        isCanceled: () -> Boolean = { false },
+    ): Boolean {
         val jarPath = ensureArthasJar()
         var httpPort: Int? = null
         var telnetPort: Int? = null
@@ -236,7 +246,12 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
             process = processBuilder.start()
             val httpClient = ArthasHttpClient(port = http)
             startOutputReader(process, pid)
-            val ready = waitForHttpReady(httpClient, http, timeoutMs = 60000) { fraction ->
+            val ready = waitForHttpReady(
+                httpClient,
+                http,
+                timeoutMs = 60000,
+                isCanceled = isCanceled,
+            ) { fraction ->
                 onProgress?.invoke(fraction)
             }
             if (!ready) {
@@ -387,14 +402,22 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
         client: ArthasHttpClient,
         port: Int,
         timeoutMs: Long,
+        isCanceled: () -> Boolean = { false },
         onProgress: ((Double) -> Unit)? = null,
     ): Boolean {
         val start = System.currentTimeMillis()
         while (System.currentTimeMillis() - start < timeoutMs) {
+            // 每轮先看取消：用户点“取消”后最多再等 200ms 就能退出（P1 B7）
+            if (isCanceled()) return false
             if (isPortOpen(port) && client.isAvailable()) {
                 return true
             }
-            Thread.sleep(200)
+            try {
+                Thread.sleep(200)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return false
+            }
             onProgress?.invoke((System.currentTimeMillis() - start).toDouble() / timeoutMs)
         }
         return false
