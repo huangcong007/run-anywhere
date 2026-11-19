@@ -27,6 +27,11 @@ object RunAnywhereNotifications {
         notify(project, title, content, NotificationType.WARNING)
     }
 
+    /** 一般信息（如设置变更确认）。 */
+    fun info(project: Project, title: String, content: String) {
+        notify(project, title, content, NotificationType.INFORMATION)
+    }
+
     private fun notify(project: Project, title: String, content: String, type: NotificationType) {
         NotificationGroupManager.getInstance()
             .getNotificationGroup(GROUP_ID)

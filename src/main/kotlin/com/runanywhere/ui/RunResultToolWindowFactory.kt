@@ -1,11 +1,10 @@
 package com.runanywhere.ui
 
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.project.DumbAware
+import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
-import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.content.Content
 import com.intellij.ui.content.ContentFactory
@@ -14,14 +13,31 @@ import com.intellij.util.ui.UIUtil
 import com.runanywhere.arthas.ArthasResponse
 import com.runanywhere.arthas.ArthasResponseParser
 import java.awt.BorderLayout
+import java.awt.Dimension
+import java.awt.Font
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import javax.swing.Box
+import javax.swing.BoxLayout
+import javax.swing.JButton
 import javax.swing.JPanel
+import javax.swing.JScrollPane
+import javax.swing.JTextArea
+import javax.swing.ScrollPaneConstants
 
-class RunResultToolWindowFactory : ToolWindowFactory, DumbAware {
+/**
+ * Run Anywhere 结果工具窗口工厂。
+ */
+class RunResultToolWindowFactory : ToolWindowFactory {
 
     companion object {
-        private const val WELCOME_TAB_NAME = "Welcome"
+        private val LOG = logger<RunResultToolWindowFactory>()
+
+        private const val WELCOME_TAB_NAME = "欢迎使用"
+
+        /** 从标题中提取 PID；若无法提取则返回 "?"。 */
+        fun extractPid(tabTitle: String): String =
+            tabTitle.substringAfter("PID ").substringBefore(" ")
 
         /**
          * 创建"执行中" Tab 并同步返回 Content。
@@ -38,7 +54,11 @@ class RunResultToolWindowFactory : ToolWindowFactory, DumbAware {
             return created
         }
 
-        private fun doCreateRunningTab(project: Project, tabTitle: String, command: String): Content? {
+        private fun doCreateRunningTab(
+            project: Project,
+            tabTitle: String,
+            command: String,
+        ): Content? {
             val toolWindow = project.getService(com.intellij.openapi.wm.ToolWindowManager::class.java)
                 ?.getToolWindow("Run Anywhere") ?: return null
             toolWindow.show()
@@ -79,14 +99,18 @@ class RunResultToolWindowFactory : ToolWindowFactory, DumbAware {
     }
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
+        // P1 A5：空态改用中文并引导操作
         val panel = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(10)
+            border = JBUI.Borders.empty(16)
             add(JBTextArea().apply {
-                text = "Run Anywhere results will appear here.\n" +
-                    "Right-click on a Java method and select \"运行方法 (Run Anywhere)\"."
                 isEditable = false
                 lineWrap = true
                 wrapStyleWord = true
+                isOpaque = false
+                background = UIUtil.getTextFieldBackground()
+                foreground = UIUtil.getContextHelpForeground()
+                font = Font(font.name, Font.ITALIC, font.size)
+                text = "结果将显示在这里。\n右键点击任意 Java 方法并选择「运行方法」开始使用。"
             }, BorderLayout.CENTER)
         }
         val content = ContentFactory.getInstance().createContent(panel, WELCOME_TAB_NAME, false)
@@ -98,35 +122,83 @@ class RunResultToolWindowFactory : ToolWindowFactory, DumbAware {
     }
 }
 
+/** 从标题中提取 PID；若无法提取则返回 "?"。 */
+internal fun extractPid(tabTitle: String): String =
+    tabTitle.substringAfter("PID ").substringBefore(" ")
+
 data class InvocationResult(
     val tabTitle: String,
     val command: String,
     val response: ArthasResponse,
     val timestamp: LocalDateTime = LocalDateTime.now(),
-    val asyncMode: Boolean = false
+    val asyncMode: Boolean = false,
 ) {
     val isSuccess: Boolean get() = ArthasResponseParser.isExecutionSuccessful(response, asyncMode)
 }
 
 private class ResultPanel private constructor() : JPanel(BorderLayout()) {
 
-    private val textArea = JBTextArea().apply {
+    // 状态行（始终显示）
+    private val stateArea = JTextArea(3, 50).apply {
+        isEditable = false
+        lineWrap = true
+        wrapStyleWord = true
+        border = JBUI.Borders.emptyBottom(8)
+    }
+
+    // 分隔线
+    private val separator = Box.createHorizontalStrut(Int.MAX_VALUE)
+
+    // 详情区（原始命令 + 原始 JSON），默认隐藏
+    private val detailsArea = JTextArea(8, 50).apply {
         isEditable = false
         lineWrap = true
         wrapStyleWord = true
     }
+    private val detailsScroll = JScrollPane(detailsArea).apply {
+        verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
+        isVisible = false
+        preferredSize = Dimension(500, 80)
+    }
+
+    // 复制诊断信息按钮
+    private val copyButton = JButton("复制诊断信息").apply {
+        toolTipText = "将命令与原始响应复制到剪贴板"
+        setBounds(0, 0, 140, 24)
+        isVisible = false
+        addActionListener { copyDiagnosticInfo() }
+    }
+
+    // 开关按钮
+    private var isDetailsVisible = false
+    private val toggleDetailsButton: JButton = JButton("显示详情").apply {
+        toolTipText = "显示/隐藏原始命令与响应（开发者调试用）"
+        setBounds(0, 0, 100, 24)
+        isVisible = false
+        addActionListener {
+            isDetailsVisible = !isDetailsVisible
+            detailsScroll.isVisible = isDetailsVisible
+            this.text = if (isDetailsVisible) "收起详情" else "显示详情"
+        }
+    }
 
     init {
         border = JBUI.Borders.empty(10)
-        add(JBScrollPane(textArea), BorderLayout.CENTER)
+        layout = BoxLayout(this, BoxLayout.Y_AXIS)
+        add(stateArea)
+        add(separator)
+        add(detailsScroll)
+        add(Box.createVerticalStrut(4))
+        add(copyButton)
+        add(toggleDetailsButton)
     }
 
     companion object {
         fun createRunning(tabTitle: String, command: String): ResultPanel =
-            ResultPanel().apply { renderRunning(tabTitle, command) }
+            ResultPanel().also { it.renderRunning(tabTitle, command) }
 
         fun createCompleted(result: InvocationResult): ResultPanel =
-            ResultPanel().apply { renderResult(result) }
+            ResultPanel().also { it.renderResult(result) }
     }
 
     fun updateWithResult(result: InvocationResult) {
@@ -135,30 +207,38 @@ private class ResultPanel private constructor() : JPanel(BorderLayout()) {
 
     private fun renderRunning(tabTitle: String, command: String) {
         val now = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
-        textArea.text = buildString {
-            appendLine("═".repeat(60))
+        stateArea.setText(buildString {
             appendLine("开始时间： $now")
             appendLine("状态：     执行中...")
             appendLine("PID：      ${extractPid(tabTitle)}")
-            appendLine("═".repeat(60))
-            appendLine()
-            appendLine("【执行的命令】")
-            appendLine(command)
-            appendLine()
-            appendLine("【正在等待 Arthas 响应，可同时运行其他方法】")
-        }
-        textArea.foreground = UIUtil.getLabelForeground()
+        })
+        stateArea.foreground = UIUtil.getLabelForeground()
+        stateArea.font = UIUtil.getLabelFont().deriveFont(Font.PLAIN.toFloat())
+        detailsArea.isVisible = false
+        copyButton.isVisible = false
+        toggleDetailsButton.isVisible = false
+        detailsScroll.isVisible = false
     }
 
     private fun renderResult(result: InvocationResult) {
         val timeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-        textArea.text = buildString {
-            appendLine("═".repeat(60))
+        val statusText = formatStatus(result)
+        val icon = when {
+            result.asyncMode && ArthasResponseParser.isAsyncSubmitted(result.response) -> "\uD83D\uDCDD"
+            result.isSuccess -> "\u2705"
+            else -> "\u274C"
+        }
+
+        stateArea.setText(buildString {
             appendLine("时间：     ${result.timestamp.format(timeFormatter)}")
-            appendLine("状态：     ${formatStatus(result)}")
+            appendLine("状态：     $icon $statusText")
             appendLine("PID：      ${extractPid(result.tabTitle)}")
-            appendLine("═".repeat(60))
-            appendLine()
+        })
+        stateArea.foreground = if (result.isSuccess) UIUtil.getLabelForeground() else UIUtil.getErrorForeground()
+        stateArea.font = UIUtil.getLabelFont().deriveFont(Font.PLAIN.toFloat())
+
+        // P1 B4：原始 JSON 折叠进详情，默认不可见
+        detailsArea.setText(buildString {
             appendLine("【执行的命令】")
             appendLine(result.command)
             appendLine()
@@ -170,8 +250,24 @@ private class ResultPanel private constructor() : JPanel(BorderLayout()) {
             appendLine()
             appendLine("【解析结果】")
             appendLine(ArthasResponseParser.parse(result.response, result.asyncMode))
+        })
+        detailsArea.isVisible = false
+        detailsScroll.isVisible = false
+        copyButton.isVisible = true
+        toggleDetailsButton.isVisible = true
+    }
+
+    private fun copyDiagnosticInfo() {
+        val text = buildString {
+            appendLine("【执行的命令】")
+            appendLine(stateArea.text.trim())
+            appendLine()
+            appendLine("【原始响应】")
+            appendLine(detailsArea.text.trim())
         }
-        textArea.foreground = if (result.isSuccess) UIUtil.getLabelForeground() else UIUtil.getErrorForeground()
+        com.intellij.openapi.ide.CopyPasteManager.getInstance().setContents(
+            java.awt.datatransfer.StringSelection(text.trimEnd())
+        )
     }
 
     private fun formatStatus(result: InvocationResult): String {
@@ -181,7 +277,4 @@ private class ResultPanel private constructor() : JPanel(BorderLayout()) {
             else -> "失败"
         }
     }
-
-    private fun extractPid(tabTitle: String): String =
-        tabTitle.substringAfter("PID ").substringBefore(" ")
 }

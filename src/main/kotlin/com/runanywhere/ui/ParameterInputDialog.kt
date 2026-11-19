@@ -83,6 +83,8 @@ class ParameterInputDialog(
 
             gbc.gridx = 3
             val nullCb = JCheckBox().apply {
+                // P1 C5：为屏幕阅读器提供 accessibleName
+                accessibleContext.accessibleName = "是否将参数 ${param.name} 设为 null"
                 addActionListener { setInputEnabled(input, !isSelected) }
             }
             nullCheckBoxes.add(nullCb)
