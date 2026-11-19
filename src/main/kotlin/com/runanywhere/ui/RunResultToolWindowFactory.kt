@@ -2,9 +2,11 @@ package com.runanywhere.ui
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
+import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
+import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.content.Content
 import com.intellij.ui.content.ContentFactory
@@ -14,12 +16,11 @@ import com.runanywhere.arthas.ArthasResponse
 import com.runanywhere.arthas.ArthasResponseParser
 import com.runanywhere.i18n.I18n
 import java.awt.BorderLayout
-import java.awt.Dimension
+import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.datatransfer.StringSelection
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import javax.swing.Box
-import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JPanel
 import javax.swing.JScrollPane
@@ -158,62 +159,73 @@ data class InvocationResult(
 
 private class ResultPanel private constructor() : JPanel(BorderLayout()) {
 
-    // 状态行（始终显示）
-    private val stateArea = JTextArea(3, 50).apply {
+    /**
+     * 状态摘要（时间 / 状态 / PID）。用 [UIUtil.getLabelFont] 原样字体，
+     * 不要再 deriveFont(0f)（派生 0 号字会让整块文字不可见）。
+     */
+    private val statusArea = JTextArea(3, 0).apply {
         isEditable = false
         lineWrap = true
         wrapStyleWord = true
+        font = UIUtil.getLabelFont()
+        background = UIUtil.getPanelBackground()
         border = JBUI.Borders.emptyBottom(8)
     }
 
-    // 分隔线
-    private val separator = Box.createHorizontalStrut(Int.MAX_VALUE)
-
-    // 详情区（原始命令 + 原始 JSON），默认隐藏
-    private val detailsArea = JTextArea(8, 50).apply {
+    /** 正文：解析结果常驻，原始命令 / 原始响应按需展开。 */
+    private val contentArea = JTextArea().apply {
         isEditable = false
         lineWrap = true
         wrapStyleWord = true
+        font = UIUtil.getLabelFont()
+        background = UIUtil.getPanelBackground()
+        border = JBUI.Borders.empty(6)
     }
-    private val detailsScroll = JScrollPane(detailsArea).apply {
+    private val contentScroll = JScrollPane(contentArea).apply {
         verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
-        isVisible = false
-        preferredSize = Dimension(500, 80)
+        horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
+        border = JBUI.Borders.customLine(JBColor.border(), 1)
     }
 
-    // 复制诊断信息按钮
+    private var lastResult: InvocationResult? = null
+    private var lastCommand: String = ""
+    private var isDetailsVisible = false
+
     private val copyButton = JButton(I18n.TAB_COPY_BUTTON()).apply {
         toolTipText = I18n.TAB_COPY_TIP()
-        setBounds(0, 0, 140, 24)
         isVisible = false
         addActionListener { copyDiagnosticInfo() }
     }
 
-    // 开关按钮
-    private var isDetailsVisible = false
-    private val toggleDetailsButton: JButton = JButton(I18n.TAB_TOGGLE_DETAILS()).apply {
+    private val toggleDetailsButton = JButton(I18n.TAB_TOGGLE_DETAILS()).apply {
         toolTipText = I18n.TAB_TOGGLE_DETAILS_TIP()
-        setBounds(0, 0, 100, 24)
         isVisible = false
         addActionListener {
             isDetailsVisible = !isDetailsVisible
-            detailsScroll.isVisible = isDetailsVisible
-            this.text = if (isDetailsVisible) I18n.TAB_COLLAPSE_DETAILS() else I18n.TAB_TOGGLE_DETAILS()
+            text = if (isDetailsVisible) I18n.TAB_COLLAPSE_DETAILS() else I18n.TAB_TOGGLE_DETAILS()
+            renderContent()
         }
+    }
+
+    /** 操作按钮固定贴底右对齐，不再随 BoxLayout 居中漂浮。 */
+    private val buttonBar = JPanel(FlowLayout(FlowLayout.RIGHT, 8, 0)).apply {
+        isOpaque = false
+        border = JBUI.Borders.emptyTop(8)
+        add(copyButton)
+        add(toggleDetailsButton)
+        isVisible = false
     }
 
     init {
         border = JBUI.Borders.empty(10)
-        layout = BoxLayout(this, BoxLayout.Y_AXIS)
-        add(stateArea)
-        add(separator)
-        add(detailsScroll)
-        add(Box.createVerticalStrut(4))
-        add(copyButton)
-        add(toggleDetailsButton)
+        add(statusArea, BorderLayout.NORTH)
+        add(contentScroll, BorderLayout.CENTER)
+        add(buttonBar, BorderLayout.SOUTH)
     }
 
     companion object {
+        private val TIME_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+
         fun createRunning(tabTitle: String, command: String): ResultPanel =
             ResultPanel().also { it.renderRunning(tabTitle, command) }
 
@@ -226,22 +238,26 @@ private class ResultPanel private constructor() : JPanel(BorderLayout()) {
     }
 
     private fun renderRunning(tabTitle: String, command: String) {
-        val now = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
-        stateArea.setText(buildString {
+        lastCommand = command
+        lastResult = null
+        val now = LocalDateTime.now().format(TIME_FORMAT)
+        statusArea.text = buildString {
             appendLine(I18n.TAB_RUNNING_START_AT(now))
             appendLine(I18n.TAB_RUNNING_STATUS())
-            appendLine(I18n.TAB_RUNNING_PID(extractPid(tabTitle)))
-        })
-        stateArea.foreground = UIUtil.getLabelForeground()
-        stateArea.font = UIUtil.getLabelFont().deriveFont(Font.PLAIN.toFloat())
-        detailsArea.isVisible = false
+            append(I18n.TAB_RUNNING_PID(extractPid(tabTitle)))
+        }
+        statusArea.foreground = UIUtil.getLabelForeground()
+
+        isDetailsVisible = false
+        renderContent()
         copyButton.isVisible = false
         toggleDetailsButton.isVisible = false
-        detailsScroll.isVisible = false
+        buttonBar.isVisible = false
     }
 
     private fun renderResult(result: InvocationResult) {
-        val timeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+        lastResult = result
+        lastCommand = result.command
         val statusText = formatStatus(result)
         val icon = when {
             result.asyncMode && ArthasResponseParser.isAsyncSubmitted(result.response) -> "\uD83D\uDCDD"
@@ -249,45 +265,69 @@ private class ResultPanel private constructor() : JPanel(BorderLayout()) {
             else -> "\u274C"
         }
 
-        stateArea.setText(buildString {
-            appendLine(I18n.TAB_RESULT_TIME(result.timestamp.format(timeFormatter)))
+        statusArea.text = buildString {
+            appendLine(I18n.TAB_RESULT_TIME(result.timestamp.format(TIME_FORMAT)))
             appendLine(I18n.TAB_RESULT_STATUS(icon, statusText))
-            appendLine(I18n.TAB_RESULT_PID(extractPid(result.tabTitle)))
-        })
-        stateArea.foreground = if (result.isSuccess) UIUtil.getLabelForeground() else UIUtil.getErrorForeground()
-        stateArea.font = UIUtil.getLabelFont().deriveFont(Font.PLAIN.toFloat())
+            append(I18n.TAB_RESULT_PID(extractPid(result.tabTitle)))
+        }
+        statusArea.foreground = if (result.isSuccess) UIUtil.getLabelForeground() else UIUtil.getErrorForeground()
 
-        // P1 B4：原始 JSON 折叠进详情，默认不可见
-        detailsArea.setText(buildString {
-            appendLine(I18n.TAB_COMMAND_HEADER())
-            appendLine(result.command)
-            appendLine()
-            appendLine(I18n.TAB_RAW_HEADER())
-            if (result.response.errorMessage != null) {
-                appendLine(I18n.TAB_ERROR_PREFIX() + result.response.errorMessage)
-            }
-            appendLine(result.response.body)
-            appendLine()
-            appendLine(I18n.TAB_PARSED_HEADER())
-            appendLine(ArthasResponseParser.parse(result.response, result.asyncMode))
-        })
-        detailsArea.isVisible = false
-        detailsScroll.isVisible = false
+        isDetailsVisible = false
+        toggleDetailsButton.text = I18n.TAB_TOGGLE_DETAILS()
+        renderContent()
         copyButton.isVisible = true
         toggleDetailsButton.isVisible = true
+        buttonBar.isVisible = true
+    }
+
+    /**
+     * 正文渲染：解析结果常驻顶部；「原始命令 / 原始响应」由按钮控制显隐。
+     * 失败时同时给出错误信息，避免用户只看到空白正文。
+     */
+    private fun renderContent() {
+        val result = lastResult
+        contentArea.text = buildString {
+            if (result == null) {
+                // 执行中：先展示即将执行的命令
+                appendLine(I18n.TAB_COMMAND_HEADER())
+                append(lastCommand)
+            } else {
+                appendLine(I18n.TAB_PARSED_HEADER())
+                appendLine(ArthasResponseParser.parse(result.response, result.asyncMode).trimEnd())
+                if (isDetailsVisible) {
+                    appendLine()
+                    appendLine(I18n.TAB_COMMAND_HEADER())
+                    append(lastCommand)
+                    appendLine()
+                    appendLine()
+                    appendLine(I18n.TAB_RAW_HEADER())
+                    result.response.errorMessage?.let { appendLine(I18n.TAB_ERROR_PREFIX() + it) }
+                    append(result.response.body)
+                }
+            }
+        }.trimEnd()
+        contentArea.foreground = UIUtil.getLabelForeground()
+        contentArea.caretPosition = 0
     }
 
     private fun copyDiagnosticInfo() {
+        val result = lastResult
         val text = buildString {
-            appendLine(I18n.TAB_COMMAND_HEADER())
-            appendLine(stateArea.text.trim())
+            appendLine(statusArea.text.trim())
             appendLine()
-            appendLine(I18n.TAB_RAW_HEADER())
-            appendLine(detailsArea.text.trim())
+            appendLine(I18n.TAB_COMMAND_HEADER())
+            appendLine(lastCommand)
+            if (result != null) {
+                appendLine()
+                appendLine(I18n.TAB_RAW_HEADER())
+                result.response.errorMessage?.let { appendLine(I18n.TAB_ERROR_PREFIX() + it) }
+                appendLine(result.response.body)
+                appendLine()
+                appendLine(I18n.TAB_PARSED_HEADER())
+                appendLine(ArthasResponseParser.parse(result.response, result.asyncMode))
+            }
         }
-        com.intellij.openapi.ide.CopyPasteManager.getInstance().setContents(
-            java.awt.datatransfer.StringSelection(text.trimEnd())
-        )
+        CopyPasteManager.getInstance().setContents(StringSelection(text.trimEnd()))
     }
 
     private fun formatStatus(result: InvocationResult): String {
