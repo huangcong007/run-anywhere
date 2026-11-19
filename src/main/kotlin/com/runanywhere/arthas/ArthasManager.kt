@@ -2,6 +2,7 @@ package com.runanywhere.arthas
 
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
+import com.runanywhere.i18n.I18n
 import com.runanywhere.settings.RunAnywhereSettings
 import java.io.File
 import java.net.InetSocketAddress
@@ -15,6 +16,8 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
 import java.util.concurrent.ConcurrentHashMap
+import java.util.zip.ZipFile
+import java.util.zip.ZipInputStream
 
 /**
  * Arthas 生命周期管理器。
@@ -28,14 +31,16 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
     companion object {
         private val LOG = logger<ArthasManager>()
 
-        const val ARTHAS_VERSION = "4.0.5"
+        const val ARTHAS_VERSION = "4.3.5"
         const val DEFAULT_HTTP_PORT = 8563
         const val DEFAULT_TELNET_PORT = 3658
         private const val MAX_PORT_OFFSET = 100
         private const val SESSION_TIMEOUT_SECONDS = 1800
         private const val CONNECT_TIMEOUT_MS = 15_000
         private const val READ_TIMEOUT_MS = 60_000
+        private const val DOWNLOAD_READ_TIMEOUT_MS = 300_000
         private const val ARTHAS_RESOURCE_PATH = "/arthas/arthas-boot.jar"
+        private const val BOOT_JAR_ENTRY = "arthas-boot.jar"
 
         private fun arthasStandardHome(): Path =
             Paths.get(System.getProperty("user.home"), ".arthas", "lib", ARTHAS_VERSION, "arthas")
@@ -45,7 +50,9 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
         private fun arthasHomeDir(): Path =
             Paths.get(System.getProperty("user.home"), ".run-anywhere", "arthas")
 
-        private fun arthasJarPath(): Path = arthasHomeDir().resolve("arthas-boot.jar")
+        /** 按版本分目录，避免插件升级后继续复用旧版本的 arthas-boot.jar。 */
+        private fun arthasJarPath(): Path =
+            arthasHomeDir().resolve(ARTHAS_VERSION).resolve("arthas-boot.jar")
     }
 
     private val sessions = ConcurrentHashMap<Long, ArthasSession>()
@@ -84,11 +91,13 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
         }
 
         val url = URI(
-            "https://repo1.maven.org/maven2/com/taobao/arthas/arthas-boot/" +
-                "$ARTHAS_VERSION/arthas-boot-$ARTHAS_VERSION.jar"
+            // Maven 上的 arthas-boot-<version>.jar 是瘦包（无 Main-Class），
+            // 必须从发行包 arthas-bin.zip 中取可执行的 arthas-boot.jar
+            "https://github.com/alibaba/arthas/releases/download/" +
+                "arthas-all-$ARTHAS_VERSION/arthas-bin.zip"
         ).toURL()
-        LOG.info("Downloading arthas-boot.jar from $url")
-        copyToFile(url, jarPath)
+        LOG.info("Downloading arthas-bin.zip from $url")
+        copyBootJarFromDist(url, jarPath)
         if (!isUsableJar(jarPath)) {
             Files.deleteIfExists(jarPath)
             throw IllegalStateException("Downloaded arthas-boot.jar is invalid")
@@ -109,28 +118,76 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
             if (!isUsableJar(part)) {
                 throw IllegalStateException("File is not a jar: $url")
             }
-            try {
-                Files.move(part, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-            } catch (_: AtomicMoveNotSupportedException) {
-                Files.move(part, target, StandardCopyOption.REPLACE_EXISTING)
-            }
+            moveAtomically(part, target)
         } finally {
             Files.deleteIfExists(part)
         }
     }
 
+    private fun copyBootJarFromDist(url: URL, target: Path) {
+        Files.createDirectories(target.parent)
+        val part = target.resolveSibling("${target.fileName}.part")
+        val connection = url.openConnection()
+        connection.connectTimeout = CONNECT_TIMEOUT_MS
+        connection.readTimeout = DOWNLOAD_READ_TIMEOUT_MS
+        try {
+            connection.getInputStream().use { input ->
+                ZipInputStream(input.buffered()).use { zip ->
+                    var entry = zip.nextEntry
+                    while (entry != null) {
+                        if (!entry.isDirectory && entry.name == BOOT_JAR_ENTRY) {
+                            Files.newOutputStream(part).use { output -> zip.copyTo(output) }
+                            break
+                        }
+                        entry = zip.nextEntry
+                    }
+                }
+            }
+            if (!isUsableJar(part)) {
+                throw IllegalStateException("$BOOT_JAR_ENTRY not found in $url")
+            }
+            moveAtomically(part, target)
+        } finally {
+            Files.deleteIfExists(part)
+        }
+    }
+
+    private fun moveAtomically(part: Path, target: Path) {
+        try {
+            Files.move(part, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(part, target, StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+
     private fun isUsableJar(path: Path): Boolean {
         if (!Files.isRegularFile(path) || Files.size(path) < 4) return false
-        return Files.newInputStream(path).use { input ->
-            val header = ByteArray(2)
-            input.read(header) == 2 && header[0] == 0x50.toByte() && header[1] == 0x4B.toByte()
+        // 瘦包（如 Maven 上的 arthas-boot）没有 Main-Class，java -jar 无法启动
+        return try {
+            ZipFile(path.toFile()).use { zip ->
+                val manifest = zip.getEntry("META-INF/MANIFEST.MF") ?: return false
+                zip.getInputStream(manifest).bufferedReader().use { reader ->
+                    reader.readText().contains("Main-Class")
+                }
+            }
+        } catch (_: Exception) {
+            false
         }
     }
 
     /**
      * Attach Arthas 到目标 JVM。同一 PID 串行，不同 PID 可以并行等待就绪。
+     *
+     * @param onProgress 进度回调，取值 0.0–1.0，由调用方（如 [com.intellij.openapi.progress.ProgressIndicator]）消费。
+     *                  若为 null 则不做进度上报（保持旧行为兼容）。
+     * @param isCanceled 取消探测。返回 true 时立刻停止等待就绪并释放本次启动的 Arthas 进程，
+     *                   避免用户点“取消”后还要等满 60 秒超时（P1 B7）。
      */
-    fun attach(pid: Long): Boolean {
+    fun attach(
+        pid: Long,
+        onProgress: ((Double) -> Unit)? = null,
+        isCanceled: () -> Boolean = { false },
+    ): Boolean {
         synchronized(pidLock(pid)) {
             val existing = sessions[pid]
             if (existing != null) {
@@ -138,7 +195,7 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
                 detachLocked(pid)
             }
             return try {
-                attachNew(pid)
+                attachNew(pid, onProgress, isCanceled)
             } catch (e: Exception) {
                 LOG.error("Failed to attach Arthas to PID $pid", e)
                 false
@@ -146,7 +203,11 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
         }
     }
 
-    private fun attachNew(pid: Long): Boolean {
+    private fun attachNew(
+        pid: Long,
+        onProgress: ((Double) -> Unit)? = null,
+        isCanceled: () -> Boolean = { false },
+    ): Boolean {
         val jarPath = ensureArthasJar()
         var httpPort: Int? = null
         var telnetPort: Int? = null
@@ -185,7 +246,14 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
             process = processBuilder.start()
             val httpClient = ArthasHttpClient(port = http)
             startOutputReader(process, pid)
-            val ready = waitForHttpReady(httpClient, http, timeoutMs = 60000)
+            val ready = waitForHttpReady(
+                httpClient,
+                http,
+                timeoutMs = 60000,
+                isCanceled = isCanceled,
+            ) { fraction ->
+                onProgress?.invoke(fraction)
+            }
             if (!ready) {
                 LOG.warn("Arthas attach to PID $pid timed out. process alive=${process.isAlive}")
                 return false
@@ -264,7 +332,7 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
             statusCode = submitted.statusCode,
             body = submitted.body,
             isSuccess = submitted.isSuccess,
-            errorMessage = "已提交，但在 ${waitTimeoutMs / 1000} 秒内没有等到返回值。若目标线程停在断点，继续执行后可重新调用。"
+            errorMessage = I18n.EXEC_ASYNC_NO_RESULT(waitTimeoutMs / 1000)
         )
     }
 
@@ -330,13 +398,27 @@ class ArthasManager(@Suppress("UNUSED_PARAMETER") private val project: Project) 
         }.start()
     }
 
-    private fun waitForHttpReady(client: ArthasHttpClient, port: Int, timeoutMs: Long): Boolean {
+    private fun waitForHttpReady(
+        client: ArthasHttpClient,
+        port: Int,
+        timeoutMs: Long,
+        isCanceled: () -> Boolean = { false },
+        onProgress: ((Double) -> Unit)? = null,
+    ): Boolean {
         val start = System.currentTimeMillis()
         while (System.currentTimeMillis() - start < timeoutMs) {
+            // 每轮先看取消：用户点“取消”后最多再等 200ms 就能退出（P1 B7）
+            if (isCanceled()) return false
             if (isPortOpen(port) && client.isAvailable()) {
                 return true
             }
-            Thread.sleep(200)
+            try {
+                Thread.sleep(200)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return false
+            }
+            onProgress?.invoke((System.currentTimeMillis() - start).toDouble() / timeoutMs)
         }
         return false
     }

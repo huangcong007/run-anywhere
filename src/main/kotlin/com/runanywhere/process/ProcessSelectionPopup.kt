@@ -1,12 +1,13 @@
 package com.runanywhere.process
 
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.psi.PsiMethod
 import com.intellij.ui.ColoredListCellRenderer
 import com.intellij.ui.SimpleTextAttributes
+import com.runanywhere.i18n.I18n
 import com.runanywhere.psi.MethodMetadata
+import com.runanywhere.ui.RunAnywhereNotifications
 import javax.swing.JList
 import javax.swing.ListSelectionModel
 
@@ -28,15 +29,16 @@ object ProcessSelectionPopup {
     ): Boolean {
         return when {
             processes.isEmpty() -> {
-                Messages.showErrorDialog(
+                RunAnywhereNotifications.warning(
                     project,
-                    "未检测到运行中的 Java 进程。\n" +
-                        "请先运行你的应用程序，然后再调用方法。",
-                    "Run Anywhere"
+                    I18n.SELECT_PROCESS_EMPTY_TITLE(),
+                    I18n.SELECT_PROCESS_EMPTY_BODY()
                 )
                 false
             }
             processes.size == 1 -> {
+                // F13：只有一个进程时用户没有选择余地，不再发"已选择进程"通知（纯噪音）。
+                // 目标进程在结果 Tab 标题里可见，已足以回答"打到了谁"。
                 onSelected(processes.first())
                 true
             }
@@ -48,6 +50,11 @@ object ProcessSelectionPopup {
                 }
                 if (autoSelected != null) {
                     onSelected(autoSelected)
+                    RunAnywhereNotifications.info(
+                        project,
+                        I18n.SELECT_PROCESS_INFO_TITLE(),
+                        I18n.SELECT_PROCESS_INFO_BODY(autoSelected.pid, autoSelected.displayName)
+                    )
                 } else {
                     showChooser(project, processes, onSelected)
                 }
@@ -71,8 +78,13 @@ object ProcessSelectionPopup {
     ) {
         val popup = JBPopupFactory.getInstance()
             .createPopupChooserBuilder(processes)
-            .setTitle("选择目标进程（未能自动匹配）")
+            .setTitle(I18n.SELECT_PROCESS_TITLE())
             .setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
+            // P2 C7：进程较多时支持输入过滤（PID 与进程名都可匹配）。
+            // 平台行为：设置 namer 即启用过滤输入框，无需额外开关。
+            .setNamerForFiltering { process: RunningProcess ->
+                "PID ${process.pid} ${process.displayName}"
+            }
             .setRenderer(object : ColoredListCellRenderer<RunningProcess>() {
                 override fun customizeCellRenderer(
                     list: JList<out RunningProcess>,

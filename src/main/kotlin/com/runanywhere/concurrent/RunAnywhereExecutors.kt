@@ -35,6 +35,22 @@ object RunAnywhereExecutors {
     private val warmupExecutor: ExecutorService =
         Executors.newSingleThreadExecutor(threadFactory)
 
+    fun executeMethod(task: (com.intellij.openapi.progress.ProgressIndicator) -> Unit, indicator: com.intellij.openapi.progress.ProgressIndicator?) {
+        if (shutdown.get()) {
+            LOG.warn("RunAnywhereExecutors is shut down, ignoring method task")
+            return
+        }
+        val ind = indicator ?: com.intellij.openapi.progress.DumbProgressIndicator()
+        methodExecutor.execute {
+            try {
+                task(ind)
+            } catch (t: Throwable) {
+                LOG.error("Unexpected error in runAnywhere method executor", t)
+            }
+        }
+    }
+
+    /** 兼容旧调用：不传 indicator 时任务仍会执行，但无进度/取消支持。 */
     fun executeMethod(task: Runnable) {
         if (shutdown.get()) {
             LOG.warn("RunAnywhereExecutors is shut down, ignoring method task")

@@ -21,6 +21,7 @@ out/
 
 # Downloaded at build time (see downloadArthasBoot task)
 src/main/resources/arthas/arthas-boot.jar
+src/main/resources/arthas/arthas-boot.version
 
 # OS
 .DS_Store

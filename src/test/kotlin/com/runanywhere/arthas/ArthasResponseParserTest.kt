@@ -49,6 +49,81 @@ class ArthasResponseParserTest {
     }
 
     @Test
+    fun `object value is rendered as clean json`() {
+        val response = ArthasResponse(
+            statusCode = 200,
+            body = """{"body":{"results":[{"type":"vmtool","value":{
+                "@type":"com.example.User",
+                "@fieldTypes":"id=java.lang.Long,name=java.lang.String",
+                "id":1,"name":"ada"}}]}}""",
+            isSuccess = true
+        )
+        // @type / @fieldTypes 是 Arthas 的展示元数据，不应出现在结果里
+        assertEquals(
+            """
+            {
+              "id": 1,
+              "name": "ada"
+            }
+            """.trimIndent(),
+            ArthasResponseParser.parse(response)
+        )
+    }
+
+    @Test
+    fun `nested object and array are pruned recursively`() {
+        val response = ArthasResponse(
+            statusCode = 200,
+            body = """{"body":{"results":[{"value":{"list":[
+                {"@type":"com.example.Item","@fieldTypes":"id=int","id":2}]}}]}}""",
+            isSuccess = true
+        )
+        assertEquals(
+            """
+            {
+              "list": [
+                {
+                  "id": 2
+                }
+              ]
+            }
+            """.trimIndent(),
+            ArthasResponseParser.parse(response)
+        )
+    }
+
+    @Test
+    fun `json string value is pretty printed`() {
+        val response = ArthasResponse(
+            statusCode = 200,
+            body = """{"body":{"results":[{"value":"{\"code\":0,\"data\":[1,2]}"}]}}""",
+            isSuccess = true
+        )
+        assertEquals(
+            """
+            {
+              "code": 0,
+              "data": [
+                1,
+                2
+              ]
+            }
+            """.trimIndent(),
+            ArthasResponseParser.parse(response)
+        )
+    }
+
+    @Test
+    fun `plain string value stays untouched`() {
+        val response = ArthasResponse(
+            statusCode = 200,
+            body = """{"body":{"results":[{"value":"hello"}]}}""",
+            isSuccess = true
+        )
+        assertEquals("hello", ArthasResponseParser.parse(response))
+    }
+
+    @Test
     fun `parses integer vmtool result`() {
         val response = ArthasResponse(
             statusCode = 200,

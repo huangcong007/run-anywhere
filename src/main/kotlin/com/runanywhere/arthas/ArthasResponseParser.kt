@@ -1,7 +1,12 @@
 package com.runanywhere.arthas
 
 import com.google.gson.Gson
+import com.google.gson.GsonBuilder
+import com.google.gson.JsonArray
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
+import com.google.gson.JsonParser
+import com.runanywhere.i18n.I18n
 
 /**
  * 解析 Arthas HTTP API 返回的 JSON 响应体。
@@ -9,6 +14,15 @@ import com.google.gson.JsonObject
 object ArthasResponseParser {
 
     private val GSON = Gson()
+
+    /** 结果统一以缩进 JSON 展示；关闭 HTML 转义，避免 `<`、`=`、`&` 被写成 \u003c 之类。 */
+    private val PRETTY_GSON: Gson = GsonBuilder()
+        .setPrettyPrinting()
+        .disableHtmlEscaping()
+        .create()
+
+    /** Arthas 在展开对象时插入的类型元数据，展示时去掉。 */
+    private val ARTHAS_META_KEYS = setOf("@type", "@fieldTypes")
 
     fun isAsyncSubmitted(response: ArthasResponse): Boolean {
         if (!response.isSuccess || response.body.isEmpty()) return false
@@ -100,8 +114,14 @@ object ArthasResponseParser {
     }
 
     fun parseIntValue(response: ArthasResponse): Int? {
-        if (!response.isSuccess) return null
-        return parse(response).trim().toIntOrNull()
+        if (!response.isSuccess || response.body.isEmpty()) return null
+        // 直接读结构化 value，不经过展示用的 parse()：展示格式将来变化不应影响实例计数。
+        val direct = runCatching {
+            val root = GSON.fromJson(response.body, JsonObject::class.java)
+            val results = root?.getAsJsonObject("body")?.getAsJsonArray("results")
+            results?.firstOrNull()?.asJsonObject?.get("value")?.asInt
+        }.getOrNull()
+        return direct ?: parse(response).trim().toIntOrNull()
     }
 
     fun parse(response: ArthasResponse, asyncMode: Boolean = false): String {
@@ -120,7 +140,7 @@ object ArthasResponseParser {
             if (response.errorMessage != null) {
                 return formatFailedMessage(response)
             }
-            return "(no result)"
+            return I18n.PARSED_NO_RESULT()
         }
         if (asyncMode && isAsyncSubmitted(response)) {
             return formatAsyncSubmittedMessage(response)
@@ -135,21 +155,52 @@ object ArthasResponseParser {
             val root = GSON.fromJson(response.body, JsonObject::class.java) ?: return response.body
             val body = root.getAsJsonObject("body") ?: return response.body
             val results = body.getAsJsonArray("results") ?: return response.body
-            val values = buildList {
-                for (element in results) {
-                    val obj = element.asJsonObject
-                    val valueElement = obj.get("value") ?: continue
-                    if (valueElement.isJsonPrimitive && valueElement.asJsonPrimitive.isString) {
-                        add(valueElement.asString)
-                    } else {
-                        add(valueElement.toString())
-                    }
-                }
+            val values = results.mapNotNull { element ->
+                element.asJsonObject.get("value")?.let { formatAsJson(it) }
             }
             if (values.isNotEmpty()) values.joinToString("\n") else response.body
         } catch (_: Exception) {
             response.body
         }
+    }
+
+    /**
+     * 把 Arthas 的 value 统一渲染成 JSON 文本。
+     *
+     * - 对象 / 数组：去掉 `@type`、`@fieldTypes` 后缩进输出，得到干净的 JSON；
+     * - 字符串：本身是 JSON 的（常见的 "接口返回 String" 场景）按 JSON 缩进，否则原样返回；
+     * - 数字 / 布尔：原样输出，它们本身就是合法 JSON 标量。
+     *
+     * 不把普通字符串加上引号：那会让"方法返回 hello"显示成 `"hello"`，
+     * 徒增噪音，而它并不携带结构信息。
+     */
+    private fun formatAsJson(value: JsonElement): String = when {
+        value.isJsonObject || value.isJsonArray -> PRETTY_GSON.toJson(stripArthasMeta(value))
+        value.isJsonPrimitive && value.asJsonPrimitive.isString -> {
+            val text = value.asString
+            val trimmed = text.trim()
+            if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+                runCatching { PRETTY_GSON.toJson(stripArthasMeta(JsonParser.parseString(trimmed))) }
+                    .getOrDefault(text)
+            } else {
+                text
+            }
+        }
+        else -> value.toString()
+    }
+
+    /** 递归删除 Arthas 注入的类型元数据，保留真实字段。 */
+    private fun stripArthasMeta(element: JsonElement): JsonElement = when {
+        element.isJsonObject -> JsonObject().apply {
+            for ((key, child) in element.asJsonObject.entrySet()) {
+                if (key in ARTHAS_META_KEYS) continue
+                add(key, stripArthasMeta(child))
+            }
+        }
+        element.isJsonArray -> JsonArray().apply {
+            element.asJsonArray.forEach { add(stripArthasMeta(it)) }
+        }
+        else -> element
     }
 
     private fun formatAsyncSubmittedMessage(response: ArthasResponse): String {
@@ -161,18 +212,18 @@ object ArthasResponseParser {
             val command = body?.get("command")?.asString
             val sessionId = root.get("sessionId")?.asString
             buildString {
-                appendLine("已异步提交执行")
-                if (jobId != null) appendLine("Job ID：$jobId")
-                if (jobStatus != null) appendLine("任务状态：$jobStatus")
-                if (sessionId != null) appendLine("Session：$sessionId")
+                appendLine(I18n.PARSED_ASYNC_SUBMITTED())
+                if (jobId != null) appendLine(I18n.PARSED_JOB_ID(jobId))
+                if (jobStatus != null) appendLine(I18n.PARSED_JOB_STATUS(jobStatus))
+                if (sessionId != null) appendLine(I18n.PARSED_SESSION(sessionId))
                 if (command != null) {
                     appendLine()
-                    appendLine("命令：$command")
+                    appendLine(I18n.PARSED_COMMAND(command))
                 }
                 appendLine()
-                appendLine("说明：")
-                appendLine("命令已在目标 JVM 中调度。")
-                appendLine("若在等待上限内没有拿到返回值，多半是目标线程停在断点。继续执行后请重新调用。")
+                appendLine(I18n.PARSED_NOTE_HEADER())
+                appendLine(I18n.PARSED_ASYNC_NOTE1())
+                appendLine(I18n.PARSED_ASYNC_NOTE2())
             }
         } catch (_: Exception) {
             response.body
@@ -186,43 +237,43 @@ object ArthasResponseParser {
             } else null
             val message = root?.get("message")?.asString
                 ?: response.errorMessage
-                ?: "执行失败"
+                ?: I18n.PARSED_FAILED()
             buildString {
-                appendLine("执行失败")
-                appendLine("原因：$message")
+                appendLine(I18n.PARSED_FAILED())
+                appendLine(I18n.PARSED_REASON(message))
                 if (message.contains("session not found", ignoreCase = true)) {
                     appendLine()
-                    appendLine("说明：Arthas HTTP Session 已过期或被服务端清理。")
-                    appendLine("插件会自动重建 Session 并重试；若仍失败，请重启目标应用后重试。")
+                    appendLine(I18n.PARSED_SESSION_EXPIRED_NOTE1())
+                    appendLine(I18n.PARSED_SESSION_EXPIRED_NOTE2())
                 }
             }
         } catch (_: Exception) {
-            response.errorMessage ?: response.body.ifEmpty { "执行失败" }
+            response.errorMessage ?: response.body.ifEmpty { I18n.PARSED_FAILED() }
         }
     }
 
     private fun formatInterruptedMessage(response: ArthasResponse): String {
         return try {
             val root = GSON.fromJson(response.body, JsonObject::class.java) ?: return response.body
-            val message = root.get("message")?.asString ?: "执行超时，已被 Arthas 强制中断"
+            val message = root.get("message")?.asString ?: I18n.PARSED_TIMEOUT_DEFAULT_REASON()
             val body = root.getAsJsonObject("body")
             val timeoutMs = body?.get("timeout")?.asLong
             val command = body?.get("command")?.asString
             buildString {
-                appendLine("执行超时")
+                appendLine(I18n.PARSED_TIMEOUT())
                 if (timeoutMs != null) {
-                    appendLine("超时限制：${timeoutMs}ms（${timeoutMs / 1000} 秒）")
+                    appendLine(I18n.PARSED_TIMEOUT_LIMIT(timeoutMs, timeoutMs / 1000))
                 }
-                appendLine("原因：$message")
+                appendLine(I18n.PARSED_REASON(message))
                 if (command != null) {
                     appendLine()
-                    appendLine("命令：$command")
+                    appendLine(I18n.PARSED_COMMAND(command))
                 }
                 appendLine()
-                appendLine("建议：")
-                appendLine("1. 勾选「异步执行」：命令在目标 JVM 后台运行，断点不会触发插件 HTTP 超时")
-                appendLine("2. 在 Settings → Other Settings → Run Anywhere 中增大「同步执行超时」")
-                appendLine("3. 确认目标方法不会在目标 JVM 中死锁或无限阻塞")
+                appendLine(I18n.PARSED_SUGGESTION_HEADER())
+                appendLine(I18n.PARSED_TIMEOUT_SUGGESTION1())
+                appendLine(I18n.PARSED_TIMEOUT_SUGGESTION2())
+                appendLine(I18n.PARSED_TIMEOUT_SUGGESTION3())
             }
         } catch (_: Exception) {
             response.body

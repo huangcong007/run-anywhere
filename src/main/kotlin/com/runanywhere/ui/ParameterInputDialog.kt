@@ -2,10 +2,11 @@ package com.runanywhere.ui
 
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
-import com.intellij.openapi.ui.Messages
-import com.intellij.ui.JBColor
+import com.intellij.openapi.ui.ValidationInfo
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
+import com.intellij.util.ui.UIUtil
+import com.runanywhere.i18n.I18n
 import com.runanywhere.psi.MethodMetadata
 import com.runanywhere.psi.ParamTypeKind
 import java.awt.Dimension
@@ -31,8 +32,8 @@ class ParameterInputDialog(
     private var ognlArgs: List<String> = emptyList()
 
     init {
-        title = "输入方法参数"
-        setOKButtonText("调用")
+        title = I18n.PARAM_DIALOG_TITLE()
+        setOKButtonText(I18n.PARAM_OK_BUTTON())
         init()
     }
 
@@ -45,15 +46,15 @@ class ParameterInputDialog(
 
         if (parameters.isEmpty()) {
             gbc.gridx = 0; gbc.gridy = 0
-            panel.add(JLabel("该方法无参数。"), gbc)
+            panel.add(JLabel(I18n.PARAM_EMPTY()), gbc)
             return panel
         }
 
         gbc.gridy = 0
-        gbc.gridx = 0; panel.add(JLabel("参数名"), gbc)
-        gbc.gridx = 1; panel.add(JLabel("类型"), gbc)
-        gbc.gridx = 2; panel.add(JLabel("值"), gbc)
-        gbc.gridx = 3; panel.add(JLabel("传 null"), gbc)
+        gbc.gridx = 0; panel.add(JLabel(I18n.PARAM_COLUMN_NAME()), gbc)
+        gbc.gridx = 1; panel.add(JLabel(I18n.PARAM_COLUMN_TYPE()), gbc)
+        gbc.gridx = 2; panel.add(JLabel(I18n.PARAM_COLUMN_VALUE()), gbc)
+        gbc.gridx = 3; panel.add(JLabel(I18n.PARAM_COLUMN_NULL()), gbc)
 
         parameters.forEachIndexed { index, param ->
             gbc.gridy = index + 1
@@ -64,10 +65,10 @@ class ParameterInputDialog(
             gbc.gridx = 1
             val typeLabel = JLabel(formatTypeLabel(param)).apply {
                 if (!OgnlLiteralConverter.isSupportedInputType(param)) {
-                    toolTipText = "不支持的类型，将传 null"
-                    foreground = JBColor.GRAY
+                    toolTipText = I18n.PARAM_UNSUPPORTED_TYPE()
+                    foreground = UIUtil.getLabelDisabledForeground()
                 } else if (JsonInputValidator.requiresJsonInput(param.kind)) {
-                    toolTipText = "通过 JSON 输入；反序列化库可在 Settings → Other Settings → Run Anywhere 配置"
+                    toolTipText = I18n.PARAM_JSON_HINT()
                 }
             }
             panel.add(typeLabel, gbc)
@@ -76,6 +77,8 @@ class ParameterInputDialog(
             gbc.weightx = 1.0
             gbc.fill = GridBagConstraints.HORIZONTAL
             val input = createInputComponent(param)
+            // P1 C5 / F7：输入控件自身需要 accessible name，否则读屏只报"文本字段"
+            applyAccessibleName(input, param)
             inputFields.add(input)
             panel.add(input, gbc)
             gbc.weightx = 0.0
@@ -83,6 +86,8 @@ class ParameterInputDialog(
 
             gbc.gridx = 3
             val nullCb = JCheckBox().apply {
+                // P1 C5：为屏幕阅读器提供 accessibleName
+                accessibleContext.accessibleName = I18n.PARAM_NULL_ACCESSIBLE_NAME(param.name)
                 addActionListener { setInputEnabled(input, !isSelected) }
             }
             nullCheckBoxes.add(nullCb)
@@ -94,29 +99,52 @@ class ParameterInputDialog(
 
     private fun createInputComponent(param: MethodMetadata.ParamInfo): JComponent {
         val supported = OgnlLiteralConverter.isSupportedInputType(param)
+        // F6：不支持的类型不再"只挂 tooltip"。禁用态的输入框内常显说明，
+        // 让不悬停、不用鼠标的用户也能知道该参数会以 null 传入。
+        val unsupportedHint = I18n.PARAM_UNSUPPORTED_INLINE()
         return if (JsonInputValidator.requiresJsonInput(param.kind)) {
             JScrollPane(
                 JBTextArea(3, 24).apply {
                     lineWrap = true
                     wrapStyleWord = true
-                    emptyText.text = JsonInputValidator.expectedJsonHint(param.kind)
+                    emptyText.text = if (supported) JsonInputValidator.expectedJsonHint(param.kind) else unsupportedHint
                     isEnabled = supported
                 }
             ).apply {
                 preferredSize = Dimension(280, 72)
             }
         } else {
-            val placeholder = when {
-                param.isEnum -> "枚举常量名，如 ACTIVE"
-                param.type == "long" || param.type == "java.lang.Long" -> "数字，如 123 或 123L"
-                param.type.startsWith("java.time.") -> "ISO-8601，如 2026-10-08T15:04:05"
-                else -> "输入值，留空表示 null"
+            val placeholder = if (!supported) {
+                unsupportedHint
+            } else when {
+                param.isEnum -> I18n.PARAM_PLACEHOLDER_ENUM()
+                param.type == "long" || param.type == "java.lang.Long" -> I18n.PARAM_PLACEHOLDER_LONG()
+                param.type.startsWith("java.time.") -> I18n.PARAM_PLACEHOLDER_TIME()
+                else -> I18n.PARAM_PLACEHOLDER_DEFAULT()
             }
             JBTextField(20).apply {
                 emptyText.text = placeholder
                 isEnabled = supported
             }
         }
+    }
+
+    /**
+     * 给输入控件设置 accessible name。
+     * 不支持的参数额外把"将传 null"写进名称，读屏用户同样能获得该信息。
+     */
+    private fun applyAccessibleName(input: JComponent, param: MethodMetadata.ParamInfo) {
+        val base = I18n.PARAM_INPUT_ACCESSIBLE_NAME(param.name, formatTypeLabel(param))
+        val name = if (OgnlLiteralConverter.isSupportedInputType(param)) {
+            base
+        } else {
+            "$base ${I18n.PARAM_UNSUPPORTED_INLINE()}"
+        }
+        val target: JComponent = when (input) {
+            is JScrollPane -> input.viewport.view as? JComponent ?: input
+            else -> input
+        }
+        target.accessibleContext.accessibleName = name
     }
 
     private fun formatTypeLabel(param: MethodMetadata.ParamInfo): String {
@@ -141,26 +169,38 @@ class ParameterInputDialog(
         else -> ""
     }
 
-    override fun doOKAction() {
+    /**
+     * 逐项校验输入；返回 [ValidationInfo] 后由平台就地提示并阻止关闭，
+     * 不使用模态消息框（平台规范：Validation Errors / Informing Users）。
+     */
+    private fun validateInputs(): ValidationInfo? {
         for (i in parameters.indices) {
             val param = parameters[i]
             if (nullCheckBoxes[i].isSelected) continue
             val raw = readInputText(inputFields[i])
-            if (JsonInputValidator.requiresJsonInput(param.kind) && raw.isNotBlank()) {
-                if (!JsonInputValidator.isValidJson(raw, param.kind)) {
-                    Messages.showErrorDialog(
-                        contentPanel,
-                        JsonInputValidator.validationErrorMessage(param.name, param.kind),
-                        "JSON 格式错误"
-                    )
-                    return
-                }
+            if (JsonInputValidator.requiresJsonInput(param.kind) && raw.isNotBlank() &&
+                !JsonInputValidator.isValidJson(raw, param.kind)
+            ) {
+                return ValidationInfo(
+                    JsonInputValidator.validationErrorMessage(param.name, param.kind),
+                    inputFields[i]
+                )
             }
             val literalError = OgnlLiteralConverter.validate(raw, param)
             if (literalError != null) {
-                Messages.showErrorDialog(contentPanel, literalError, "参数格式错误")
-                return
+                return ValidationInfo(literalError, inputFields[i])
             }
+        }
+        return null
+    }
+
+    override fun doValidate(): ValidationInfo? = validateInputs()
+
+    override fun doOKAction() {
+        val error = validateInputs()
+        if (error != null) {
+            setErrorText(error.message, error.component)
+            return
         }
 
         ognlArgs = parameters.indices.map { i ->
