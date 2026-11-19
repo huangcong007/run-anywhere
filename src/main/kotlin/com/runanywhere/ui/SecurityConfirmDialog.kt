@@ -22,6 +22,8 @@ class SecurityConfirmDialog(project: Project) : DialogWrapper(project) {
         setOKButtonText(I18n.SECURITY_OK_BUTTON())
         setCancelButtonText(I18n.SECURITY_CANCEL_BUTTON())
         init()
+        // P1 B8：危险操作不作为默认按钮。Enter 走“取消”，避免手快误触注入目标 JVM。
+        rootPane?.defaultButton = getButton(getCancelAction())
     }
 
     override fun createCenterPanel(): JComponent {

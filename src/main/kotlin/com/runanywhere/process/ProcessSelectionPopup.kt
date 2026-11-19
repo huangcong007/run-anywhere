@@ -84,6 +84,11 @@ object ProcessSelectionPopup {
             .createPopupChooserBuilder(processes)
             .setTitle(I18n.SELECT_PROCESS_TITLE())
             .setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
+            // P2 C7：进程较多时支持输入过滤（PID 与进程名都可匹配）。
+            // 平台行为：设置 namer 即启用过滤输入框，无需额外开关。
+            .setNamerForFiltering { process: RunningProcess ->
+                "PID ${process.pid} ${process.displayName}"
+            }
             .setRenderer(object : ColoredListCellRenderer<RunningProcess>() {
                 override fun customizeCellRenderer(
                     list: JList<out RunningProcess>,

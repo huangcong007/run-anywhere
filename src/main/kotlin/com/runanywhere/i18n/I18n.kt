@@ -88,6 +88,10 @@ object I18n {
     fun SETTINGS_JSON_LIB_HINT() = message("settings.jsonLib.hint")
     fun SETTINGS_RESTORE_SECURITY() = message("settings.restoreSecurity")
     fun SETTINGS_RESTORE_SECURITY_TIP() = message("settings.restoreSecurity.tip")
+    fun SETTINGS_ERROR_TIMEOUT(min: Int, max: Int, current: Int) =
+        message("settings.error.timeout", min, max, current)
+    fun SETTINGS_ERROR_EXPAND(min: Int, max: Int, current: Int) =
+        message("settings.error.expand", min, max, current)
 
     // ── 执行反馈 ─────────────────────────────────────────
     fun EXEC_ATTACH_FAIL_TITLE() = message("exec.attachFail.title")

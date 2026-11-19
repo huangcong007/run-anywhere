@@ -99,8 +99,21 @@
             icon="com.runanywhere.icons.RunAnywhereIcons.ToolWindow"
             text="运行方法"
             description="通过内置 Arthas 调用运行中 JVM 内的该方法">
-            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
             <keyboard-shortcut keymap="$default" first-keystroke="alt shift A"/>
         </action>
+
+        <!--
+            P1 A1：不再抢占 EditorPopupMenu 首位。收进 "Run Anywhere" 子菜单并放在菜单末尾，
+            与平台 Run/Debug 相关动作分开，避免干扰用户既有肌肉记忆。
+            子菜单标签用产品名，中英文界面都适用。
+        -->
+        <group
+            id="RunAnywhere.EditorPopupMenu"
+            text="Run Anywhere"
+            popup="true"
+            icon="com.runanywhere.icons.RunAnywhereIcons.ToolWindow">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+            <reference ref="com.runanywhere.RunMethodAction"/>
+        </group>
     </actions>
 </idea-plugin>

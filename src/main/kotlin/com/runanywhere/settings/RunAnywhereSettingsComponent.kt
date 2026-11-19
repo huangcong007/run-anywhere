@@ -100,6 +100,35 @@ class RunAnywhereSettingsComponent {
     }
 
     /**
+     * P2 C2：校验当前 UI 值。
+     *
+     * spinner 本身有上下界，但 NumberEditor 允许用户手工输入任意文本，
+     * 非法输入会被 `JSpinner` 自身吞掉（静默保留旧值）。这里再显式检查一次，
+     * 由 [RunAnywhereSettingsConfigurable] 抛出 `ConfigurationException` 就地提示。
+     *
+     * @return 首个错误文案；全部合法时返回 null。
+     */
+    fun validate(): String? {
+        val timeout = timeoutSpinner.value as Int
+        if (timeout !in RunAnywhereSettings.MIN_EXEC_TIMEOUT_SECONDS..RunAnywhereSettings.MAX_EXEC_TIMEOUT_SECONDS) {
+            return I18n.SETTINGS_ERROR_TIMEOUT(
+                RunAnywhereSettings.MIN_EXEC_TIMEOUT_SECONDS,
+                RunAnywhereSettings.MAX_EXEC_TIMEOUT_SECONDS,
+                timeout,
+            )
+        }
+        val expand = expandSpinner.value as Int
+        if (expand !in RunAnywhereSettings.MIN_RESULT_EXPAND_LEVEL..RunAnywhereSettings.MAX_RESULT_EXPAND_LEVEL) {
+            return I18n.SETTINGS_ERROR_EXPAND(
+                RunAnywhereSettings.MIN_RESULT_EXPAND_LEVEL,
+                RunAnywhereSettings.MAX_RESULT_EXPAND_LEVEL,
+                expand,
+            )
+        }
+        return null
+    }
+
+    /**
      * 保存当前 UI 值到持久化存储。
      * 由于 spinner 已受边界限制，这里无需再做 clamp/coerceIn（P1 C1 修复）。
      */

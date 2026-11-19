@@ -1,6 +1,7 @@
 package com.runanywhere.settings
 
 import com.intellij.openapi.options.Configurable
+import com.intellij.openapi.options.ConfigurationException
 import com.runanywhere.i18n.I18n
 import javax.swing.JComponent
 
@@ -21,7 +22,10 @@ class RunAnywhereSettingsConfigurable : Configurable {
     override fun isModified(): Boolean = component?.isModified() ?: false
 
     override fun apply() {
-        component?.apply()
+        val current = component ?: return
+        // P2 C2：校验失败抛 ConfigurationException，由设置页就地红字提示，不静默改值
+        current.validate()?.let { throw ConfigurationException(it) }
+        current.apply()
     }
 
     override fun reset() {
